@@ -22,6 +22,7 @@ benchmarks/generated/
 
 # Results file
 results.tsv
+flash_attn*.whl
 vendor/flash_attn*.whl
 
 # Logs
