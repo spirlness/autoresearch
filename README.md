@@ -44,6 +44,12 @@ uv run python -m autoresearch_trainer
 
 If the above commands all work ok, your setup is working and you can go into autonomous research mode.
 
+## Git safety
+
+This repo keeps local dependency wheels under `vendor/`, but those files must stay untracked. We install a versioned `pre-push` hook with `git config core.hooksPath .githooks` so pushes fail fast if they include files larger than `90 MB` or common ML artifact formats such as `*.whl`, `*.pt`, `*.ckpt`, `*.safetensors`, or `*.onnx`.
+
+If you need a large binary, keep it as a local cache or publish it through GitHub Releases or object storage instead of committing it into Git history.
+
 ## Performance profiles
 
 Two validated profiles are built in:
