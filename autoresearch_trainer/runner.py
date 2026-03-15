@@ -206,7 +206,7 @@ def main() -> int:
         return cooldown * 1.0 + (1 - cooldown) * runtime.optimization.final_lr_frac
 
     def get_muon_momentum(step):
-        frac = min(step / 300, 1)
+        frac = min(step / runtime.optimization.muon_warmup_steps, 1) if runtime.optimization.muon_warmup_steps > 0 else 1.0
         return (1 - frac) * 0.85 + frac * 0.95
 
     def get_weight_decay(progress):
@@ -324,7 +324,8 @@ def main() -> int:
             gc.collect()
             gc.freeze()
             gc.disable()
-        elif (step + 1) % 5000 == 0:
+        elif (step + 1) % 1000 == 0:
+            # Regularly collect since GC is disabled during training
             gc.collect()
 
         step += 1

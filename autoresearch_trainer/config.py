@@ -32,6 +32,8 @@ class ModelSettings:
     activation_checkpoint: str
     default_device_batch_size: int
     device_batch_size: int
+    ve_gate_channels: int
+    softcap: float
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,7 @@ class OptimizationSettings:
     warmup_ratio: float
     warmdown_ratio: float
     final_lr_frac: float
+    muon_warmup_steps: int
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,7 @@ ADAM_BETAS = (0.8, 0.95)
 WARMUP_RATIO = 0.0
 WARMDOWN_RATIO = 0.5
 FINAL_LR_FRAC = 0.0
+MUON_WARMUP_STEPS = 300
 TARGET_MFU_PERCENT = 50.0
 VE_GATE_CHANNELS = 32
 SOFTCAP = 15.0
@@ -134,6 +138,11 @@ def env_override_int(name: str, default: int) -> int:
 def env_override_str(name: str, default: str) -> str:
     override = os.environ.get(name)
     return override if override is not None else default
+
+
+def env_override_float(name: str, default: float) -> float:
+    override = os.environ.get(name)
+    return float(override) if override is not None else default
 
 
 def pick_device_batch_size(default_batch_size: int) -> int:
@@ -239,6 +248,7 @@ def build_runtime_config(
         warmup_ratio=WARMUP_RATIO,
         warmdown_ratio=WARMDOWN_RATIO,
         final_lr_frac=FINAL_LR_FRAC,
+        muon_warmup_steps=env_override_int("MUON_WARMUP_STEPS", MUON_WARMUP_STEPS),
     )
     return RuntimeConfig(
         experiment_profile=args.experiment_profile,

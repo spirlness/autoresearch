@@ -30,12 +30,13 @@ def resolve_attention_backend():
 
 def estimate_device_peak_flops(device_props):
     flops_per_cycle_by_capability = {
-        (9, 0): 4096,
-        (8, 0): 2048,
-        (8, 6): 1024,
-        (8, 9): 1024,
-        (7, 0): 1024,
-        (7, 5): 1024,
+        (10, 0): 8192,  # Blackwell
+        (9, 0): 4096,   # Hopper
+        (8, 0): 2048,   # Ampere (A100)
+        (8, 6): 1024,   # Ampere (Consumer)
+        (8, 9): 1024,   # Ada Lovelace
+        (7, 0): 1024,   # Volta
+        (7, 5): 1024,   # Turing
     }
     capability = (device_props.major, device_props.minor)
     flops_per_cycle = flops_per_cycle_by_capability.get(capability)
