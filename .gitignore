@@ -23,3 +23,15 @@ benchmarks/generated/
 # Results file
 results.tsv
 vendor/flash_attn*.whl
+
+# Logs
+*.log
+*.log.*
+error.log
+
+# Metrics and data files
+*.jsonl
+metrics.jsonl
+
+# Test artifacts
+test_*.py
