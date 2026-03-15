@@ -40,7 +40,7 @@ name = "autoresearch"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
-    { name = "flash-attn", marker = "sys_platform == 'win32'" },
+    { name = "flash-attn", marker = "python_full_version == '3.12.*' and platform_machine == 'AMD64' and sys_platform == 'win32'" },
     { name = "kernels" },
     { name = "matplotlib" },
     { name = "numpy" },
@@ -55,7 +55,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flash-attn", marker = "sys_platform == 'win32'", path = "flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" },
+    { name = "flash-attn", marker = "python_full_version == '3.12.*' and platform_machine == 'AMD64' and sys_platform == 'win32'", path = "vendor/flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" },
     { name = "kernels", specifier = ">=0.11.7" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy", specifier = ">=2.2.6" },
@@ -313,10 +313,10 @@ wheels = [
 [[package]]
 name = "flash-attn"
 version = "2.8.3"
-source = { path = "flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" }
+source = { path = "vendor/flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" }
 dependencies = [
-    { name = "einops", marker = "sys_platform == 'win32'" },
-    { name = "torch", marker = "sys_platform == 'win32'" },
+    { name = "einops", marker = "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'" },
+    { name = "torch", marker = "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'" },
 ]
 wheels = [
     { filename = "flash_attn-2.8.3+cu130torch2.10.0cxx11abitrue-cp312-cp312-win_amd64.whl", hash = "sha256:d1e76adda81f57d9a300b9e8d71b9c467e07923e0d8e5baa5d90e2007815ec93" },

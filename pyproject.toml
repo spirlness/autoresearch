@@ -19,7 +19,7 @@ dependencies = [
 ]
 
 [tool.uv.sources]
-flash-attn = { path = "flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" }
+flash-attn = { path = "vendor/flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" }
 torch = [
     { index = "pytorch-cu130" },
 ]

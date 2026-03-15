@@ -34,11 +34,9 @@ class ModelSettings:
 
 @dataclass(frozen=True)
 class CompileSettings:
-    requested_model_backend: str
     model_backend: str
     mode: str
     scope: str
-    requested_optimizer_backend: str
     optimizer_backend: str
     use_compiled_execution: bool
     use_compiled_model: bool
@@ -204,11 +202,9 @@ def build_runtime_config(
         device_batch_size=pick_device_batch_size(profile.device_batch_size),
     )
     compile_settings = CompileSettings(
-        requested_model_backend=args.compile_backend,
         model_backend=model_compile_backend,
         mode=args.compile_mode,
         scope=args.compile_scope,
-        requested_optimizer_backend=args.optimizer_compile_backend,
         optimizer_backend=optimizer_compile_backend,
         use_compiled_execution=model_compile_backend != "off",
         use_compiled_model=model_compile_backend != "off" and args.compile_scope == "model",

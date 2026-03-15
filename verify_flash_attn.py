@@ -1,4 +1,4 @@
-# Flash Attention 2.8.3 Verification Script
+"""Verify the local Flash Attention installation on the active CUDA device."""
 
 import sys
 
@@ -14,8 +14,8 @@ except ImportError as exc:
 else:
     FLASH_ATTN_IMPORT_ERROR = None
 
-def verify_installation():
-    """Verify Flash Attention installation"""
+def verify_installation() -> bool:
+    """Run an import and smoke test for the pinned Flash Attention wheel."""
     print("=" * 70)
     print("Flash Attention 2.8.3 Environment Verification")
     print("=" * 70)
@@ -73,13 +73,17 @@ def verify_installation():
         print(f"  [OK] Performance:  {100/elapsed:.2f} iterations/sec")
         print(f"\n[SUCCESS] All tests passed! Flash Attention 2.8.3 is ready!")
 
-    except Exception as e:
-        print(f"  [FAILED] Test failed: {e}")
+    except Exception as exc:
+        print(f"  [FAILED] Test failed: {exc}")
         return False
 
     print("=" * 70)
     return True
 
+
+def main() -> int:
+    return 0 if verify_installation() else 1
+
+
 if __name__ == "__main__":
-    success = verify_installation()
-    sys.exit(0 if success else 1)
+    raise SystemExit(main())

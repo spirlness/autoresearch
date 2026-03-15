@@ -21,7 +21,6 @@ AVAILABLE_INDUCTOR_MODES = sorted(inductor.list_mode_options().keys())
 
 @dataclass(frozen=True)
 class CompilePreparation:
-    compile_kwargs: dict[str, Any] | None
     msvc_cl_path: str | None
     msvc_help_encoding: str | None
 
@@ -188,20 +187,10 @@ def maybe_configure_msvc_utf8_help(compiler: str | None) -> str | None:
     return "utf-8"
 
 
-def build_compile_kwargs(model_backend: str, compile_mode: str) -> dict[str, Any] | None:
-    if model_backend == "off":
-        return None
-    compile_kwargs: dict[str, Any] = {"backend": model_backend, "dynamic": False}
-    if model_backend == "inductor":
-        compile_kwargs["mode"] = compile_mode
-    return compile_kwargs
-
-
 def prepare_compile_environment(
     *,
     model_backend: str,
     optimizer_backend: str,
-    compile_mode: str,
 ) -> CompilePreparation:
     msvc_cl_path = None
     msvc_help_encoding = None
@@ -209,7 +198,6 @@ def prepare_compile_environment(
         msvc_cl_path = ensure_windows_msvc_compiler()
         msvc_help_encoding = maybe_configure_msvc_utf8_help(msvc_cl_path)
     return CompilePreparation(
-        compile_kwargs=build_compile_kwargs(model_backend, compile_mode),
         msvc_cl_path=msvc_cl_path,
         msvc_help_encoding=msvc_help_encoding,
     )

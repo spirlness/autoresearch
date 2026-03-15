@@ -98,7 +98,6 @@ def main() -> int:
     compile_prep = prepare_compile_environment(
         model_backend=runtime.compile.model_backend,
         optimizer_backend=runtime.compile.optimizer_backend,
-        compile_mode=runtime.compile.mode,
     )
 
     attention_backend, attention_op = resolve_attention_backend()

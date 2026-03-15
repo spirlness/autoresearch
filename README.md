@@ -8,11 +8,13 @@ The idea: give an AI agent a small but real LLM training setup and let it experi
 
 ## How it works
 
-The repo is deliberately kept small and only really has three files that matter:
+The repo is still intentionally small, but the training runtime is now split into a thin entrypoint plus a compact package:
 
-- **`prepare.py`** — fixed constants, one-time data prep (downloads training data, trains a BPE tokenizer), and runtime utilities (dataloader, evaluation). Not modified.
-- **`train.py`** — the single file the agent edits. Contains the full GPT model, optimizer (Muon + AdamW), and training loop. Everything is fair game: architecture, hyperparameters, optimizer, batch size, etc. **This file is edited and iterated on by the agent**.
-- **`program.md`** — baseline instructions for one agent. Point your agent here and let it go. **This file is edited and iterated on by the human**.
+- **`prepare.py`** — fixed constants, one-time data prep, tokenizer training, dataloader, and evaluation. This remains the evaluation harness.
+- **`train.py`** — tiny entrypoint that configures the environment and forwards into the trainer package.
+- **`autoresearch_trainer/`** — model, optimizer, compile integration, runtime loop, and validated experiment profiles.
+- **`program.md`** — baseline instructions for an autonomous coding agent.
+- **`benchmarks/`** — curated benchmark history plus the distilled findings from recent tuning work.
 
 By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
 
@@ -35,9 +37,27 @@ uv run prepare.py
 
 # 4. Manually run a single training experiment (~5 min)
 uv run train.py
+
+# Optional: use the package module entrypoint
+uv run python -m autoresearch_trainer
 ```
 
 If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+
+## Performance profiles
+
+Two validated profiles are built in:
+
+- `baseline` / `default` — throughput-first default for day-to-day runs
+- `mfu50` — utilization-first profile tuned to cross `50% MFU` on the current Windows RTX 3060 setup
+
+Examples:
+
+```bash
+uv run train.py --benchmark-steps 20
+uv run train.py --experiment-profile baseline --benchmark-steps 20
+uv run train.py --experiment-profile mfu50 --benchmark-steps 20
+```
 
 ## Running the agent
 
@@ -52,17 +72,27 @@ The `program.md` file is essentially a super lightweight "skill".
 ## Project structure
 
 ```
-prepare.py      — constants, data prep + runtime utilities (do not modify)
-train.py        — model, optimizer, training loop (agent modifies this)
-program.md      — agent instructions
-pyproject.toml  — dependencies
+prepare.py                 — fixed data prep + evaluation harness
+train.py                   — thin entrypoint
+autoresearch_trainer/      — modular training runtime
+benchmarks/                — benchmark archive + preserved findings
+program.md                 — agent instructions
+verify_flash_attn.py       — local Flash Attention smoke test
+pyproject.toml             — dependencies
+vendor/                    — pinned Windows wheel(s) required by uv
 ```
 
 ## Design choices
 
-- **Single file to modify.** The agent only touches `train.py`. This keeps the scope manageable and diffs reviewable.
+- **Small modular core.** The training code is split by responsibility so it stays easy to read and easier to extend than a monolithic script.
 - **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
+- **Validated profiles.** High-throughput and high-MFU settings are kept as named profiles instead of being scattered through ad-hoc notes.
 - **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+
+## Windows notes
+
+- Flash Attention and `torch.compile` support on Windows are documented in `docs/windows_flash_attention.md`.
+- Recent benchmark analysis and preserved findings live in `benchmarks/SUMMARY_2026-03-15.md` and `benchmarks/KEY_FINDINGS.md`.
 
 ## Platform support
 
