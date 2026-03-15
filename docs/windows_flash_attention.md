@@ -8,9 +8,9 @@ This project keeps a single source of truth for the Windows-specific setup neede
 - PyTorch `2.10.0`
 - CUDA `13.0`
 - `triton-windows==3.6.0.post26`
-- Flash Attention wheel in `vendor/flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl`
+- Flash Attention wheel `flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl`
 
-The wheel is intentionally kept inside `vendor/` because the Windows path is part of the reproducible environment for `uv sync`.
+The wheel is fetched directly by `uv` from its pinned download URL and verified against SHA256 `d1e76adda81f57d9a300b9e8d71b9c467e07923e0d8e5baa5d90e2007815ec93`. This keeps the Git repository free of large binary history while preserving a reproducible install on Windows.
 
 ## Install / verify
 
@@ -18,6 +18,8 @@ The wheel is intentionally kept inside `vendor/` because the Windows path is par
 uv sync
 uv run python verify_flash_attn.py
 ```
+
+If you want an extra local backup copy, you can keep the wheel under `vendor/`, but it is no longer required for `uv sync` and should remain untracked.
 
 Expected outcome:
 

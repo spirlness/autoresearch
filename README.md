@@ -30,6 +30,7 @@ If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/s
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 2. Install dependencies
+#    On supported Windows machines, uv downloads the pinned Flash Attention wheel automatically.
 uv sync
 
 # 3. Download data and train tokenizer (one-time, ~2 min)
@@ -46,7 +47,9 @@ If the above commands all work ok, your setup is working and you can go into aut
 
 ## Git safety
 
-This repo keeps local dependency wheels under `vendor/`, but those files must stay untracked. We install a versioned `pre-push` hook with `git config core.hooksPath .githooks` so pushes fail fast if they include files larger than `90 MB` or common ML artifact formats such as `*.whl`, `*.pt`, `*.ckpt`, `*.safetensors`, or `*.onnx`.
+This repo installs the pinned Windows Flash Attention wheel directly from its upstream download URL, so the main setup no longer depends on a tracked local wheel. If you choose to keep local wheels under `vendor/` as a personal cache, those files must stay untracked.
+
+We install a versioned `pre-push` hook with `git config core.hooksPath .githooks` so pushes fail fast if they include files larger than `90 MB` or common ML artifact formats such as `*.whl`, `*.pt`, `*.ckpt`, `*.safetensors`, or `*.onnx`.
 
 If you need a large binary, keep it as a local cache or publish it through GitHub Releases or object storage instead of committing it into Git history.
 
@@ -87,7 +90,7 @@ benchmarks/                — benchmark archive + preserved findings
 program.md                 — agent instructions
 verify_flash_attn.py       — local Flash Attention smoke test
 pyproject.toml             — dependencies
-vendor/                    — pinned Windows wheel(s) required by uv
+vendor/                    — optional untracked local wheel cache
 ```
 
 ## Design choices
@@ -101,6 +104,7 @@ vendor/                    — pinned Windows wheel(s) required by uv
 ## Windows notes
 
 - Flash Attention and `torch.compile` support on Windows are documented in `docs/windows_flash_attention.md`.
+- The pinned Windows Flash Attention wheel is downloaded by `uv sync` from its direct URL and validated with a SHA256 hash.
 - Recent benchmark analysis and preserved findings live in `benchmarks/SUMMARY_2026-03-15.md` and `benchmarks/KEY_FINDINGS.md`.
 
 ## Platform support

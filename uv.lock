@@ -55,7 +55,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
-    { name = "flash-attn", marker = "python_full_version == '3.12.*' and platform_machine == 'AMD64' and sys_platform == 'win32'", path = "vendor/flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" },
+    { name = "flash-attn", marker = "python_full_version == '3.12.*' and platform_machine == 'AMD64' and sys_platform == 'win32'", url = "https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" },
     { name = "kernels", specifier = ">=0.11.7" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "numpy", specifier = ">=2.2.6" },
@@ -313,13 +313,13 @@ wheels = [
 [[package]]
 name = "flash-attn"
 version = "2.8.3"
-source = { path = "vendor/flash_attn-2.8.3+cu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" }
+source = { url = "https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl" }
 dependencies = [
     { name = "einops", marker = "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'" },
     { name = "torch", marker = "python_full_version >= '3.12' and python_full_version < '3.14' and sys_platform == 'win32'" },
 ]
 wheels = [
-    { filename = "flash_attn-2.8.3+cu130torch2.10.0cxx11abitrue-cp312-cp312-win_amd64.whl", hash = "sha256:d1e76adda81f57d9a300b9e8d71b9c467e07923e0d8e5baa5d90e2007815ec93" },
+    { url = "https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl", hash = "sha256:d1e76adda81f57d9a300b9e8d71b9c467e07923e0d8e5baa5d90e2007815ec93" },
 ]
 
 [package.metadata]
