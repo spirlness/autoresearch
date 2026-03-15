@@ -11,7 +11,13 @@ import numpy as np
 import pyarrow.parquet as pq
 import torch
 
-from prepare import CACHE_DIR, TOKENIZER_DIR, VAL_FILENAME, Tokenizer, list_parquet_files
+from prepare import (
+    CACHE_DIR,
+    TOKENIZER_DIR,
+    VAL_FILENAME,
+    Tokenizer,
+    list_parquet_files,
+)
 
 
 CACHE_VERSION = 1
@@ -37,10 +43,14 @@ def _cache_dtype(vocab_size: int) -> np.dtype:
 
 
 def _train_shard_paths() -> list[Path]:
-    return [Path(path) for path in list_parquet_files() if not path.endswith(VAL_FILENAME)]
+    return [
+        Path(path) for path in list_parquet_files() if not path.endswith(VAL_FILENAME)
+    ]
 
 
-def _fingerprint_inputs(train_paths: list[Path], tokenizer_path: Path, tokenizer: Tokenizer) -> str:
+def _fingerprint_inputs(
+    train_paths: list[Path], tokenizer_path: Path, tokenizer: Tokenizer
+) -> str:
     hasher = hashlib.sha256()
     hasher.update(f"token-cache-v{CACHE_VERSION}".encode("utf-8"))
     hasher.update(str(tokenizer.get_vocab_size()).encode("utf-8"))
@@ -57,7 +67,9 @@ def _fingerprint_inputs(train_paths: list[Path], tokenizer_path: Path, tokenizer
     return hasher.hexdigest()
 
 
-def _meta_matches(meta: dict, cache_path: Path, *, fingerprint: str, dtype_name: str) -> bool:
+def _meta_matches(
+    meta: dict, cache_path: Path, *, fingerprint: str, dtype_name: str
+) -> bool:
     if meta.get("version") != CACHE_VERSION:
         return False
     if meta.get("fingerprint") != fingerprint:
@@ -73,7 +85,9 @@ def _meta_matches(meta: dict, cache_path: Path, *, fingerprint: str, dtype_name:
     return cache_path.stat().st_size == expected_size
 
 
-def ensure_train_token_cache(tokenizer: Tokenizer, *, verbose: bool = True) -> TokenCacheInfo:
+def ensure_train_token_cache(
+    tokenizer: Tokenizer, *, verbose: bool = True
+) -> TokenCacheInfo:
     train_paths = _train_shard_paths()
     if not train_paths:
         raise RuntimeError("No training shards found. Run prepare.py first.")
@@ -90,7 +104,9 @@ def ensure_train_token_cache(tokenizer: Tokenizer, *, verbose: bool = True) -> T
     if meta_path.exists():
         with open(meta_path, "r", encoding="utf-8") as handle:
             meta = json.load(handle)
-        if _meta_matches(meta, cache_path, fingerprint=fingerprint, dtype_name=dtype.name):
+        if _meta_matches(
+            meta, cache_path, fingerprint=fingerprint, dtype_name=dtype.name
+        ):
             return TokenCacheInfo(
                 cache_path=cache_path,
                 meta_path=meta_path,
@@ -114,10 +130,14 @@ def ensure_train_token_cache(tokenizer: Tokenizer, *, verbose: bool = True) -> T
                 shard_tokens = 0
                 parquet_file = pq.ParquetFile(shard_path)
                 for row_group_idx in range(parquet_file.num_row_groups):
-                    row_group = parquet_file.read_row_group(row_group_idx, columns=["text"])
+                    row_group = parquet_file.read_row_group(
+                        row_group_idx, columns=["text"]
+                    )
                     texts = row_group.column("text").to_pylist()
                     for batch_start in range(0, len(texts), TOKENIZER_BATCH_SIZE):
-                        doc_batch = texts[batch_start:batch_start + TOKENIZER_BATCH_SIZE]
+                        doc_batch = texts[
+                            batch_start : batch_start + TOKENIZER_BATCH_SIZE
+                        ]
                         token_lists = tokenizer.encode(doc_batch, prepend=bos_token)
                         flat_count = sum(len(doc) for doc in token_lists)
                         flat_tokens = np.fromiter(
@@ -180,7 +200,12 @@ class TokenWindowLoader:
         self.row_capacity = sequence_len + 1
         self.device = device
         self.dtype = np.dtype(cache_info.dtype_name)
-        self.tokens = np.memmap(cache_info.cache_path, dtype=self.dtype, mode="r", shape=(cache_info.num_tokens,))
+        self.tokens = np.memmap(
+            cache_info.cache_path,
+            dtype=self.dtype,
+            mode="r",
+            shape=(cache_info.num_tokens,),
+        )
         if cache_info.num_tokens <= self.row_capacity:
             raise RuntimeError(
                 f"Train token cache has only {cache_info.num_tokens} tokens, which is not enough for "
@@ -194,20 +219,34 @@ class TokenWindowLoader:
         self.host_windows = np.empty((batch_size, self.row_capacity), dtype=self.dtype)
         self.host_windows_tensor = torch.from_numpy(self.host_windows)
         self.row_buffer = torch.empty((batch_size, self.row_capacity), dtype=torch.long)
-        self.cpu_buffer = torch.empty(2 * batch_size * sequence_len, dtype=torch.long, pin_memory=True)
-        self.gpu_buffer = torch.empty(2 * batch_size * sequence_len, dtype=torch.long, device=device)
-        self.cpu_inputs = self.cpu_buffer[:batch_size * sequence_len].view(batch_size, sequence_len)
-        self.cpu_targets = self.cpu_buffer[batch_size * sequence_len:].view(batch_size, sequence_len)
-        self.inputs = self.gpu_buffer[:batch_size * sequence_len].view(batch_size, sequence_len)
-        self.targets = self.gpu_buffer[batch_size * sequence_len:].view(batch_size, sequence_len)
+        self.cpu_buffer = torch.empty(
+            2 * batch_size * sequence_len, dtype=torch.long, pin_memory=True
+        )
+        self.gpu_buffer = torch.empty(
+            2 * batch_size * sequence_len, dtype=torch.long, device=device
+        )
+        self.cpu_inputs = self.cpu_buffer[: batch_size * sequence_len].view(
+            batch_size, sequence_len
+        )
+        self.cpu_targets = self.cpu_buffer[batch_size * sequence_len :].view(
+            batch_size, sequence_len
+        )
+        self.inputs = self.gpu_buffer[: batch_size * sequence_len].view(
+            batch_size, sequence_len
+        )
+        self.targets = self.gpu_buffer[batch_size * sequence_len :].view(
+            batch_size, sequence_len
+        )
 
     def __iter__(self) -> TokenWindowLoader:
         return self
 
     def __next__(self):
-        starts = torch.randint(0, self.max_start + 1, (self.batch_size,), generator=self.generator)
+        starts = torch.randint(
+            0, self.max_start + 1, (self.batch_size,), generator=self.generator
+        )
         for row_idx, start in enumerate(starts.tolist()):
-            self.host_windows[row_idx] = self.tokens[start:start + self.row_capacity]
+            self.host_windows[row_idx] = self.tokens[start : start + self.row_capacity]
         self.row_buffer.copy_(self.host_windows_tensor)
         self.cpu_inputs.copy_(self.row_buffer[:, :-1])
         self.cpu_targets.copy_(self.row_buffer[:, 1:])

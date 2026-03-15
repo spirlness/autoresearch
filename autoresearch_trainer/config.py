@@ -222,7 +222,9 @@ def build_runtime_config(
         window_pattern=env_override_str("WINDOW_PATTERN", profile.window_pattern),
         max_seq_len=env_override_int("MAX_SEQ_LEN", profile.max_seq_len),
         depth=env_override_int("DEPTH", profile.depth),
-        activation_checkpoint=env_override_str("ACTIVATION_CHECKPOINT", profile.activation_checkpoint),
+        activation_checkpoint=env_override_str(
+            "ACTIVATION_CHECKPOINT", profile.activation_checkpoint
+        ),
         default_device_batch_size=profile.device_batch_size,
         device_batch_size=pick_device_batch_size(profile.device_batch_size),
         vocab_size=vocab_size,
@@ -235,14 +237,19 @@ def build_runtime_config(
         scope=args.compile_scope,
         optimizer_backend=optimizer_compile_backend,
         use_compiled_execution=model_compile_backend != "off",
-        use_compiled_model=model_compile_backend != "off" and args.compile_scope == "model",
-        use_compiled_microstep=model_compile_backend != "off" and args.compile_scope == "microstep",
-        use_compiled_trunk=model_compile_backend != "off" and args.compile_scope == "trunk",
+        use_compiled_model=model_compile_backend != "off"
+        and args.compile_scope == "model",
+        use_compiled_microstep=model_compile_backend != "off"
+        and args.compile_scope == "microstep",
+        use_compiled_trunk=model_compile_backend != "off"
+        and args.compile_scope == "trunk",
     )
     benchmark_settings = BenchmarkSettings(
         steps=args.benchmark_steps,
         enabled=args.benchmark_steps > 0,
-        warmup_steps=env_override_int("BENCHMARK_WARMUP_STEPS", profile.benchmark_warmup_steps),
+        warmup_steps=env_override_int(
+            "BENCHMARK_WARMUP_STEPS", profile.benchmark_warmup_steps
+        ),
         log_interval=env_override_int("LOG_INTERVAL", profile.log_interval),
         target_mfu_percent=TARGET_MFU_PERCENT,
     )
