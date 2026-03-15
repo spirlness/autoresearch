@@ -14,6 +14,7 @@ import sys
 import time
 import math
 import argparse
+import bisect
 import pickle
 from multiprocessing import Pool
 
@@ -286,8 +287,6 @@ def make_dataloader(tokenizer, B, T, split, buffer_size=1000):
     bos_token = tokenizer.get_bos_token_id()
     doc_buffer = []
     epoch = 1
-
-    import bisect
 
     def refill_buffer():
         nonlocal epoch

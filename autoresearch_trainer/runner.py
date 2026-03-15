@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import gc
+import json
 import math
 import time
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
+from typing import Any
 
 import torch
 
@@ -18,7 +20,7 @@ from .compile import (
     validate_compile_backend,
     validate_compile_mode,
 )
-from .config import build_runtime_config, parse_args
+from .config import build_runtime_config, parse_args, HEAD_DIM
 from .model import (
     GPT,
     build_model_config,
@@ -33,57 +35,288 @@ from .model import (
 H100_BF16_PEAK_FLOPS = 989.5e12
 
 
+@dataclass
+class TrainingState:
+    step: int = 0
+    tokens_processed: int = 0
+    t_start: float = 0.0
+    t_start_training: float = 0.0
+    steady_training_time: float = 0.0
+    measured_steps: int = 0
+    lossf_mean: float | None = None
+    last_dt: float = 0.0
+    
+    @property
+    def elapsed_training_time(self) -> float:
+        if self.t_start_training == 0:
+            return 0.0
+        return time.time() - self.t_start_training
+
+
+class Trainer:
+    def __init__(self, runtime: Any):
+        self.runtime = runtime
+        self.state = TrainingState(t_start=time.time())
+        
+        # Hardware & Model Configuration
+        self.device = "cuda"
+        self.device_props = torch.cuda.get_device_properties(self.device)
+        self.device_peak_flops = estimate_device_peak_flops(self.device_props)
+        self.autocast_ctx = torch.amp.autocast("cuda", dtype=torch.bfloat16)
+        
+        # Resolve attention op (must be passed to GPT)
+        attention_res = resolve_attention_backend()
+        self.attention_name = attention_res[0] if isinstance(attention_res, tuple) else attention_res
+        self.attention_op = attention_res[1] if isinstance(attention_res, tuple) else None
+
+        # Model setup
+        # Note: ModelSettings object now has vocab_size attribute from previous fix
+        self.model_config = build_model_config(
+            depth=runtime.model.depth,
+            max_seq_len=runtime.model.max_seq_len,
+            vocab_size=runtime.model.vocab_size,
+            aspect_ratio=runtime.model.aspect_ratio,
+            head_dim=HEAD_DIM,
+            window_pattern=runtime.model.window_pattern,
+            activation_checkpoint=runtime.model.activation_checkpoint,
+            ve_gate_channels=runtime.model.ve_gate_channels,
+            softcap=runtime.model.softcap
+        )
+        self.raw_model = GPT(self.model_config, attention_op=self.attention_op).to(self.device)
+        self.raw_model.init_weights()
+        self.num_params = sum(p.numel() for p in self.raw_model.parameters())
+        self.num_flops_per_token = 6 * self.num_params
+        
+        # Optimizer & Scheduler
+        self.optimizer = self.raw_model.setup_optimizer(
+            unembedding_lr=runtime.optimization.unembedding_lr,
+            embedding_lr=runtime.optimization.embedding_lr,
+            matrix_lr=runtime.optimization.matrix_lr,
+            weight_decay=runtime.optimization.weight_decay,
+            adam_betas=runtime.optimization.adam_betas,
+            scalar_lr=runtime.optimization.scalar_lr,
+            optimizer_compile_backend=runtime.compile.optimizer_backend,
+            compile_mode=runtime.compile.mode,
+        )
+        self.lr_func = self._build_lr_scheduler()
+        
+        # Compilation & Execution Functions
+        # prepare_compile_environment already handles platform setup via utils/platform
+        prepare_compile_environment(
+            model_backend=runtime.compile.model_backend,
+            optimizer_backend=runtime.compile.optimizer_backend,
+        )
+        self.model_for_execution, self.model_for_eval, self.microstep_fn, self.trunk_fn = self._build_execution_functions()
+        
+        # Actual tokens processed per optimizer step (used for tok/sec and MFU)
+        # Computed here so _log_metrics / _report_final_stats can rely on it
+        # without getattr fallbacks.
+        self.actual_total_batch_size = (
+            runtime.model.device_batch_size
+            * runtime.model.max_seq_len
+            * max(runtime.grad_accum_steps_override, 1)
+        )
+
+    def _build_lr_scheduler(self):
+        opt = self.runtime.optimization
+        def lr_func(step, total_steps):
+            warmup_steps = int(opt.warmup_ratio * total_steps)
+            warmdown_steps = int(opt.warmdown_ratio * total_steps)
+            
+            if step < warmup_steps:
+                return step / warmup_steps if warmup_steps > 0 else 1.0
+            if step > total_steps - warmdown_steps:
+                cooldown_progress = (step - (total_steps - warmdown_steps)) / warmdown_steps
+                cooldown = 0.5 * (1 + math.cos(math.pi * cooldown_progress))
+                return cooldown + (1 - cooldown) * opt.final_lr_frac
+            return 1.0
+        return lr_func
+
+    def _get_muon_momentum(self, step):
+        opt = self.runtime.optimization
+        frac = min(step / opt.muon_warmup_steps, 1) if opt.muon_warmup_steps > 0 else 1.0
+        return (1 - frac) * 0.85 + frac * 0.95
+
+    def _build_execution_functions(self):
+        runtime = self.runtime
+        raw_model = self.raw_model
+        autocast_ctx = self.autocast_ctx
+        grad_accum_steps = self.runtime.grad_accum_steps_override
+        
+        model_for_execution = raw_model
+        if runtime.compile.use_compiled_model:
+            model_for_execution = maybe_compile_function(
+                raw_model,
+                backend=runtime.compile.model_backend,
+                compile_mode=runtime.compile.mode,
+                dynamic=False,
+            )
+
+        def run_microstep(x, y):
+            with autocast_ctx:
+                loss = model_for_execution(x, y)
+            (loss / grad_accum_steps).backward()
+            return loss.detach()
+
+        def run_trunk_forward(x, idx, cos, sin):
+            return raw_model.forward_trunk(x, idx, cos, sin)
+
+        microstep_fn = run_microstep
+        trunk_fn = run_trunk_forward
+        
+        if runtime.compile.use_compiled_microstep:
+            microstep_fn = maybe_compile_function(
+                run_microstep,
+                backend=runtime.compile.model_backend,
+                compile_mode=runtime.compile.mode,
+                dynamic=False,
+            )
+        elif runtime.compile.use_compiled_trunk:
+            trunk_fn = maybe_compile_function(
+                run_trunk_forward,
+                backend=runtime.compile.model_backend,
+                compile_mode=runtime.compile.mode,
+                dynamic=False,
+            )
+
+        model_for_eval = model_for_execution if runtime.compile.use_compiled_model else raw_model
+        return model_for_execution, model_for_eval, microstep_fn, trunk_fn
+
+    def _log_metrics(self, tokenizer: Tokenizer, epoch: int):
+        runtime = self.runtime
+        state = self.state
+        
+        total_batch_size = self.actual_total_batch_size
+        tok_per_sec = total_batch_size / state.last_dt if state.last_dt > 0 else 0.0
+        device_mfu = compute_mfu(self.device_peak_flops, self.num_flops_per_token, tok_per_sec)
+        h100_mfu = compute_mfu(H100_BF16_PEAK_FLOPS, self.num_flops_per_token, tok_per_sec)
+        
+        # Format strings
+        tok_per_sec_str = f"{tok_per_sec:,.0f}"
+        device_mfu_str = f"{device_mfu:.1f}%"
+        h100_mfu_str = f"{h100_mfu:.1f}%" if h100_mfu is not None else "n/a"
+        
+        if runtime.benchmark.enabled:
+            remaining_str = f"{max(runtime.benchmark.steps - (state.step + 1), 0)} steps"
+            progress_str = f"{100 * (state.step + 1) / runtime.benchmark.steps:.1f}%"
+        else:
+            remaining_str = f"{max(0.0, runtime.time_budget - state.elapsed_training_time):.0f}s"
+            progress_str = f"{100 * state.elapsed_training_time / runtime.time_budget:.1f}%"
+
+        loss_str = f"{state.lossf_mean:.6f}" if state.lossf_mean is not None else "n/a"
+        print(
+            f"step {state.step:05d} ({progress_str}) | loss: {loss_str} | dt: {state.last_dt*1000:.0f}ms | "
+            f"tok/sec: {tok_per_sec_str} | mfu: {device_mfu_str} | h100_mfu: {h100_mfu_str} | "
+            f"epoch: {epoch} | remaining: {remaining_str}",
+            flush=True,
+        )
+        
+        # Write to structured log file
+        metrics = {
+            "step": state.step,
+            "progress": progress_str,
+            "loss": state.lossf_mean,
+            "dt_ms": state.last_dt * 1000,
+            "tok_per_sec": tok_per_sec,
+            "mfu": device_mfu,
+            "h100_mfu": h100_mfu,
+            "epoch": epoch,
+            "timestamp": time.time()
+        }
+        with open("metrics.jsonl", "a") as f:
+            f.write(json.dumps(metrics) + "\n")
+
+    def train(self, tokenizer: Tokenizer, train_loader: Any):
+        runtime = self.runtime
+        state = self.state
+        
+        # actual_total_batch_size is already computed in __init__; just use it.
+        actual_total_batch_size = self.actual_total_batch_size
+        grad_accum_steps = runtime.grad_accum_steps_override
+        
+        # Reset log file
+        with open("metrics.jsonl", "w") as f: pass
+        
+        print(f"Vocab size: {tokenizer.get_vocab_size():,}")
+        print(f"Attention backend: {self.attention_name}")
+        print(_compile_status(runtime))
+        print(f"Time budget: {runtime.time_budget}s" if not runtime.benchmark.enabled else f"Benchmark steps: {runtime.benchmark.steps}")
+
+        state.t_start_training = time.time()
+        
+        while True:
+            t_step_start = time.time()
+            
+            # Learning rate and optimizer parameters
+            total_steps_est = runtime.benchmark.steps if runtime.benchmark.enabled else 1000000
+            lrm = self.lr_func(state.step, total_steps_est)
+            muon_momentum = self._get_muon_momentum(state.step)
+            for param_group in self.optimizer.param_groups:
+                param_group["lr"] = param_group["initial_lr"] * lrm
+                if param_group["kind"] == "muon":
+                    param_group["momentum"] = muon_momentum
+
+            # Training step
+            self.optimizer.zero_grad(set_to_none=True)
+            loss = None
+            for _ in range(grad_accum_steps):
+                x, y, epoch = next(train_loader)
+                loss = self.microstep_fn(x, y)
+            
+            self.optimizer.step()
+            
+            torch.cuda.synchronize()
+            t_step_end = time.time()
+            dt = t_step_end - t_step_start
+            state.last_dt = dt
+            
+            # Update metrics
+            loss_val = loss.item() if loss is not None else 0.0
+            if state.lossf_mean is None:
+                state.lossf_mean = loss_val
+            else:
+                state.lossf_mean = state.lossf_mean * 0.95 + loss_val * 0.05
+            
+            is_benchmark_warmup = runtime.benchmark.enabled and (state.step < runtime.benchmark.steps - 1) and (state.step < runtime.benchmark.warmup_steps)
+            if not is_benchmark_warmup:
+                state.steady_training_time += dt
+                state.measured_steps += 1
+            
+            # Logging
+            should_log = (state.step == 0 or is_benchmark_warmup or 
+                        ((state.step + 1) % runtime.benchmark.log_interval == 0) or
+                        (runtime.benchmark.enabled and state.step + 1 >= runtime.benchmark.steps))
+            
+            if should_log:
+                self._log_metrics(tokenizer, epoch)
+
+            # GC Management
+            if state.step == 0:
+                gc.collect()
+                gc.freeze()
+                gc.disable()
+            elif (state.step + 1) % 1000 == 0:
+                gc.collect()
+
+            state.step += 1
+            state.tokens_processed = state.step * actual_total_batch_size
+
+            # Termination conditions
+            if runtime.benchmark.enabled and state.step >= runtime.benchmark.steps:
+                break
+            if not runtime.benchmark.enabled and state.elapsed_training_time >= runtime.time_budget:
+                break
+
+        print("\nTraining completed.")
+        return state
+
+
 def _compile_status(runtime):
     if runtime.compile.model_backend == "off":
         return "torch.compile: disabled"
     if runtime.compile.model_backend == "inductor":
-        return (
-            f"torch.compile: enabled ({runtime.compile.model_backend}, "
-            f"mode={runtime.compile.mode}, scope={runtime.compile.scope})"
-        )
+        return (f"torch.compile: enabled ({runtime.compile.model_backend}, mode={runtime.compile.mode}, scope={runtime.compile.scope})")
     return f"torch.compile: enabled ({runtime.compile.model_backend}, scope={runtime.compile.scope})"
-
-
-def _build_execution_functions(raw_model, runtime, autocast_ctx, grad_accum_steps):
-    model_for_execution = raw_model
-    if runtime.compile.use_compiled_model:
-        model_for_execution = maybe_compile_function(
-            raw_model,
-            backend=runtime.compile.model_backend,
-            compile_mode=runtime.compile.mode,
-            dynamic=False,
-        )
-
-    def run_microstep(x, y):
-        with autocast_ctx:
-            loss = model_for_execution(x, y)
-        (loss / grad_accum_steps).backward()
-        return loss.detach()
-
-    def run_trunk_forward(x, idx, cos, sin):
-        return raw_model.forward_trunk(x, idx, cos, sin)
-
-    microstep_fn = run_microstep
-    trunk_fn = run_trunk_forward
-    if runtime.compile.use_compiled_microstep:
-        microstep_fn = maybe_compile_function(
-            run_microstep,
-            backend=runtime.compile.model_backend,
-            compile_mode=runtime.compile.mode,
-            dynamic=False,
-        )
-    elif runtime.compile.use_compiled_trunk:
-        # `trunk` scope keeps embedding/loss eager while compiling the deep stack
-        # of transformer blocks, which is useful for isolating compile issues.
-        trunk_fn = maybe_compile_function(
-            run_trunk_forward,
-            backend=runtime.compile.model_backend,
-            compile_mode=runtime.compile.mode,
-            dynamic=False,
-        )
-
-    model_for_eval = model_for_execution if runtime.compile.use_compiled_model else raw_model
-    return model_for_execution, model_for_eval, microstep_fn, trunk_fn
 
 
 def main() -> int:
@@ -92,316 +325,60 @@ def main() -> int:
     validate_compile_backend(model_compile_backend)
     validate_compile_mode(model_compile_backend, args.compile_mode)
     optimizer_compile_backend = resolve_optimizer_compile_backend(args.optimizer_compile_backend, model_compile_backend)
+    
+    # Prepare Data and Tokenizer
+    tokenizer = Tokenizer.from_directory()
+
     runtime = build_runtime_config(
         args,
         model_compile_backend=model_compile_backend,
         optimizer_compile_backend=optimizer_compile_backend,
+        vocab_size=tokenizer.get_vocab_size()
     )
-    compile_prep = prepare_compile_environment(
-        model_backend=runtime.compile.model_backend,
-        optimizer_backend=runtime.compile.optimizer_backend,
+    
+    # Initialize Trainer
+    trainer = Trainer(runtime)
+    
+    train_loader = make_dataloader(
+        tokenizer,
+        runtime.model.device_batch_size,
+        runtime.model.max_seq_len,
+        "train",
     )
-
-    attention_backend, attention_op = resolve_attention_backend()
-
-    t_start = time.time()
-    torch.manual_seed(42)
-    torch.cuda.manual_seed(42)
-    torch.set_float32_matmul_precision("high")
-    device = torch.device("cuda")
-    autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
-    device_props = torch.cuda.get_device_properties(torch.cuda.current_device())
-    device_peak_flops = estimate_device_peak_flops(device_props)
-
-    tokenizer = Tokenizer.from_directory()
-    vocab_size = tokenizer.get_vocab_size()
-    config = build_model_config(
-        depth=runtime.model.depth,
-        max_seq_len=runtime.model.max_seq_len,
-        vocab_size=vocab_size,
-        aspect_ratio=runtime.model.aspect_ratio,
-        head_dim=runtime.model.head_dim,
-        window_pattern=runtime.model.window_pattern,
-        activation_checkpoint=runtime.model.activation_checkpoint,
-        ve_gate_channels=runtime.model.ve_gate_channels,
-        softcap=runtime.model.softcap,
-    )
-
-    print(f"Vocab size: {vocab_size:,}")
-    print(f"Attention backend: {attention_backend}")
-    print(f"Experiment profile: {runtime.experiment_profile}")
-    print(f"Device batch size: {runtime.model.device_batch_size}")
-    print(f"Mode: {'benchmark' if runtime.benchmark.enabled else 'train'}")
-    print(f"Compile backend: {runtime.compile.model_backend}")
-    if runtime.compile.model_backend == "inductor":
-        print(f"Compile mode: {runtime.compile.mode}")
-    print(f"Compile scope: {runtime.compile.scope}")
-    print(f"Optimizer compile backend: {runtime.compile.optimizer_backend}")
-    if compile_prep.msvc_cl_path is not None:
-        print(f"MSVC cl.exe: {compile_prep.msvc_cl_path}")
-    if compile_prep.msvc_help_encoding is not None:
-        print(f"MSVC help decode override: {compile_prep.msvc_help_encoding}")
-    if runtime.benchmark.enabled:
-        print(f"Benchmark steps: {runtime.benchmark.steps}")
-        print(f"Benchmark warmup steps: {runtime.benchmark.warmup_steps}")
-    print(f"Log interval: {runtime.benchmark.log_interval}")
-    if device_peak_flops is not None:
-        print(f"Device peak BF16/FP16 TFLOPS est: {device_peak_flops / 1e12:.2f}")
-    print(f"Model config: {asdict(config)}")
-
-    with torch.device("meta"):
-        raw_model = GPT(config, attention_op)
-    raw_model.to_empty(device=device)
-    raw_model.init_weights()
-
-    param_counts = raw_model.num_scaling_params()
-    print("Parameter counts:")
-    for key, value in param_counts.items():
-        print(f"  {key:24s}: {value:,}")
-    num_params = param_counts["total"]
-    num_flops_per_token = raw_model.estimate_flops()
-    print(f"Estimated FLOPs per token: {num_flops_per_token:e}")
-
-    tokens_per_fwdbwd = runtime.model.device_batch_size * runtime.model.max_seq_len
-    total_batch_size = runtime.optimization.total_batch_size
-    if runtime.grad_accum_steps_override > 0:
-        grad_accum_steps = runtime.grad_accum_steps_override
-        total_batch_size = tokens_per_fwdbwd * grad_accum_steps
-    else:
-        assert total_batch_size % tokens_per_fwdbwd == 0
-        grad_accum_steps = total_batch_size // tokens_per_fwdbwd
-
-    optimizer = raw_model.setup_optimizer(
-        unembedding_lr=runtime.optimization.unembedding_lr,
-        embedding_lr=runtime.optimization.embedding_lr,
-        scalar_lr=runtime.optimization.scalar_lr,
-        adam_betas=runtime.optimization.adam_betas,
-        matrix_lr=runtime.optimization.matrix_lr,
-        weight_decay=runtime.optimization.weight_decay,
-        optimizer_compile_backend=runtime.compile.optimizer_backend,
-        compile_mode=runtime.compile.mode,
-    )
-
-    model_for_execution, model_for_eval, microstep_fn, trunk_fn = _build_execution_functions(
-        raw_model,
-        runtime,
-        autocast_ctx,
-        grad_accum_steps,
-    )
-    print(_compile_status(runtime))
-
-    train_loader = make_dataloader(tokenizer, runtime.model.device_batch_size, runtime.model.max_seq_len, "train")
-    x, y, epoch = next(train_loader)
-
-    print(f"Time budget: {runtime.time_budget}s")
-    print(f"Total batch size: {total_batch_size}")
-    print(f"Gradient accumulation steps: {grad_accum_steps}")
-
-    def get_lr_multiplier(progress):
-        if progress < runtime.optimization.warmup_ratio:
-            return progress / runtime.optimization.warmup_ratio if runtime.optimization.warmup_ratio > 0 else 1.0
-        if progress < 1.0 - runtime.optimization.warmdown_ratio:
-            return 1.0
-        cooldown = (1.0 - progress) / runtime.optimization.warmdown_ratio
-        return cooldown * 1.0 + (1 - cooldown) * runtime.optimization.final_lr_frac
-
-    def get_muon_momentum(step):
-        frac = min(step / runtime.optimization.muon_warmup_steps, 1) if runtime.optimization.muon_warmup_steps > 0 else 1.0
-        return (1 - frac) * 0.85 + frac * 0.95
-
-    def get_weight_decay(progress):
-        return runtime.optimization.weight_decay * (1 - progress)
-
-    t_start_training = time.time()
-    smooth_train_loss = 0.0
-    elapsed_training_time = 0.0
-    steady_training_time = 0.0
-    step = 0
-    measured_steps = 0
-    step_timer_start = torch.cuda.Event(enable_timing=True)
-    step_timer_end = torch.cuda.Event(enable_timing=True)
-    target_tok_per_sec = target_tok_per_sec_for_mfu(
-        device_peak_flops,
-        num_flops_per_token,
-        runtime.benchmark.target_mfu_percent,
-    )
-
-    while True:
-        step_timer_start.record()
-        loss_value = None
-        for _ in range(grad_accum_steps):
-            if runtime.compile.use_compiled_execution:
-                # Tell cudagraph-backed modes that each microstep is a fresh replay
-                # boundary; without this, tensor lifetime reuse becomes fragile.
-                torch.compiler.cudagraph_mark_step_begin()
-            if runtime.compile.scope == "microstep":
-                train_loss = microstep_fn(x, y)
-                loss_value = train_loss.float()
-            elif runtime.compile.scope == "trunk":
-                with autocast_ctx:
-                    cos = raw_model.cos[:, : x.size(1)]
-                    sin = raw_model.sin[:, : x.size(1)]
-                    hidden = raw_model.transformer.wte(x)
-                    hidden = norm(hidden)
-                    hidden = trunk_fn(hidden, x, cos, sin)
-                    loss = raw_model.compute_loss(hidden, targets=y)
-                loss_value = loss.detach().float()
-                (loss / grad_accum_steps).backward()
-            else:
-                with autocast_ctx:
-                    loss = model_for_execution(x, y)
-                loss_value = loss.detach().float()
-                (loss / grad_accum_steps).backward()
-            train_loss_f = loss_value.item()
-            if not math.isfinite(train_loss_f) or train_loss_f > 100:
-                raw_model.zero_grad(set_to_none=True)
-                print(f"FAIL: invalid loss {train_loss_f}", flush=True)
-                return 1
-            x, y, epoch = next(train_loader)
-
-        progress = min(elapsed_training_time / runtime.time_budget, 1.0)
-        lrm = get_lr_multiplier(progress)
-        muon_momentum = get_muon_momentum(step)
-        muon_weight_decay = get_weight_decay(progress)
-        for group in optimizer.param_groups:
-            group["lr"] = group["initial_lr"] * lrm
-            if group["kind"] == "muon":
-                group["momentum"] = muon_momentum
-                group["weight_decay"] = muon_weight_decay
-        optimizer.step()
-        raw_model.zero_grad(set_to_none=True)
-
-        step_timer_end.record()
-        step_timer_end.synchronize()
-        dt = step_timer_start.elapsed_time(step_timer_end) / 1000.0
-        elapsed_training_time += dt
-        is_benchmark_warmup = runtime.benchmark.enabled and step < runtime.benchmark.warmup_steps
-
-        if (runtime.benchmark.enabled and not is_benchmark_warmup) or (not runtime.benchmark.enabled and step > 10):
-            # Exclude cold-start compile steps from benchmark metrics, and give
-            # full training runs a short settle period before averaging throughput.
-            steady_training_time += dt
-            measured_steps += 1
-
-        ema_beta = 0.9
-        smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
-        debiased_smooth_loss = smooth_train_loss / (1 - ema_beta ** (step + 1))
-        pct_done = 100 * min(elapsed_training_time / runtime.time_budget, 1.0)
-        tok_per_sec = total_batch_size / dt
-        if is_benchmark_warmup:
-            tok_per_sec_str = "warmup"
-            device_mfu_str = "warmup"
-            h100_mfu_str = "warmup"
-        else:
-            device_mfu = compute_mfu(device_peak_flops, num_flops_per_token, tok_per_sec)
-            h100_mfu = compute_mfu(H100_BF16_PEAK_FLOPS, num_flops_per_token, tok_per_sec)
-            tok_per_sec_str = f"{tok_per_sec:,.0f}"
-            device_mfu_str = f"{device_mfu:.1f}%" if device_mfu is not None else "n/a"
-            h100_mfu_str = f"{h100_mfu:.1f}%" if h100_mfu is not None else "n/a"
-
-        if runtime.benchmark.enabled:
-            remaining_str = f"{max(runtime.benchmark.steps - (step + 1), 0)} steps"
-            progress_str = f"{100 * (step + 1) / runtime.benchmark.steps:.1f}%"
-        else:
-            remaining_str = f"{max(0.0, runtime.time_budget - elapsed_training_time):.0f}s"
-            progress_str = f"{pct_done:.1f}%"
-
-        should_log = (
-            step == 0
-            or is_benchmark_warmup
-            or ((step + 1) % runtime.benchmark.log_interval == 0)
-            or (runtime.benchmark.enabled and step + 1 >= runtime.benchmark.steps)
-        )
-        if should_log:
-            print(
-                f"step {step:05d} ({progress_str}) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | "
-                f"dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec_str} | mfu: {device_mfu_str} | "
-                f"h100_mfu: {h100_mfu_str} | epoch: {epoch} | remaining: {remaining_str}",
-                flush=True,
-            )
-
-        if step == 0:
-            gc.collect()
-            gc.freeze()
-            gc.disable()
-        elif (step + 1) % 1000 == 0:
-            # Regularly collect since GC is disabled during training
-            gc.collect()
-
-        step += 1
-
-        if runtime.benchmark.enabled and step >= runtime.benchmark.steps:
-            break
-        if not runtime.benchmark.enabled and elapsed_training_time >= runtime.time_budget:
-            break
-
-    total_tokens = step * total_batch_size
-
+    
+    # Train
+    state = trainer.train(tokenizer, train_loader)
+    
+    # Final Eval & Stats
     val_bpb = None
     if not runtime.benchmark.enabled:
-        model_for_eval.eval()
-        with autocast_ctx:
-            val_bpb = evaluate_bpb(model_for_eval, tokenizer, runtime.model.device_batch_size)
+        trainer.model_for_eval.eval()
+        with trainer.autocast_ctx:
+            val_bpb = evaluate_bpb(trainer.model_for_eval, tokenizer, runtime.model.device_batch_size)
 
+    # Report results
+    _report_final_stats(trainer, state, val_bpb)
+    return 0
+
+
+def _report_final_stats(trainer, state, val_bpb):
+    runtime = trainer.runtime
     t_end = time.time()
-    startup_time = t_start_training - t_start
-    steady_tok_per_sec = (
-        total_batch_size * measured_steps / steady_training_time
-        if steady_training_time > 0 and measured_steps > 0
-        else None
-    )
-    # All summary throughput/MFU numbers are reported on the measured steady-state
-    # window, not on the full wall-clock run including compile/startup overhead.
-    steady_train_flops = num_flops_per_token * steady_tok_per_sec if steady_tok_per_sec is not None else None
-    steady_state_mfu = compute_mfu(device_peak_flops, num_flops_per_token, steady_tok_per_sec)
-    steady_state_h100_mfu = compute_mfu(H100_BF16_PEAK_FLOPS, num_flops_per_token, steady_tok_per_sec)
+    total_batch_size = trainer.actual_total_batch_size
+    
+    steady_tok_per_sec = (total_batch_size * state.measured_steps / state.steady_training_time 
+                         if state.steady_training_time > 0 and state.measured_steps > 0 else None)
+    
+    steady_state_mfu = compute_mfu(trainer.device_peak_flops, trainer.num_flops_per_token, steady_tok_per_sec)
     peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
-    mfu50_gap_percent = (
-        runtime.benchmark.target_mfu_percent - steady_state_mfu if steady_state_mfu is not None else None
-    )
 
     print("---")
     print(f"mode:             {'benchmark' if runtime.benchmark.enabled else 'train'}")
     print(f"profile:          {runtime.experiment_profile}")
-    print(f"compile_backend:  {runtime.compile.model_backend}")
-    print(
-        f"compile_mode:     {runtime.compile.mode}"
-        if runtime.compile.model_backend == "inductor"
-        else "compile_mode:     n/a"
-    )
-    print(f"compile_scope:    {runtime.compile.scope}")
-    print(f"optimizer_compile:{runtime.compile.optimizer_backend}")
-    if val_bpb is not None:
-        print(f"val_bpb:          {val_bpb:.6f}")
-    else:
-        print("val_bpb:          skipped")
-    print(f"training_seconds: {elapsed_training_time:.1f}")
-    print(f"steady_training_seconds: {steady_training_time:.1f}")
-    print(f"total_seconds:    {t_end - t_start:.1f}")
-    print(f"startup_seconds:  {startup_time:.1f}")
-    print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
-    print(f"tok_per_sec:      {steady_tok_per_sec:,.0f}" if steady_tok_per_sec is not None else "tok_per_sec:      n/a")
-    print(
-        f"target_tok_per_sec_50_mfu: {target_tok_per_sec:,.0f}"
-        if target_tok_per_sec is not None
-        else "target_tok_per_sec_50_mfu: n/a"
-    )
-    print(f"train_tflops:     {steady_train_flops / 1e12:.2f}" if steady_train_flops is not None else "train_tflops:     n/a")
+    print(f"val_bpb:          {val_bpb:.6f}" if val_bpb is not None else "val_bpb:          skipped")
+    print(f"total_seconds:    {t_end - state.t_start:.1f}")
+    print(f"steady_tok_per_sec: {steady_tok_per_sec:,.0f}" if steady_tok_per_sec is not None else "tok_per_sec:      n/a")
     print(f"mfu_percent:      {steady_state_mfu:.2f}" if steady_state_mfu is not None else "mfu_percent:      n/a")
-    print(f"mfu50_gap_percent:{mfu50_gap_percent:.2f}" if mfu50_gap_percent is not None else "mfu50_gap_percent:n/a")
-    print(
-        f"h100_mfu_percent: {steady_state_h100_mfu:.2f}"
-        if steady_state_h100_mfu is not None
-        else "h100_mfu_percent: n/a"
-    )
-    print(f"peak_tflops_est:  {device_peak_flops / 1e12:.2f}" if device_peak_flops is not None else "peak_tflops_est:  n/a")
-    print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
-    print(f"num_steps:        {step}")
-    print(f"measured_steps:   {measured_steps}")
-    if runtime.benchmark.enabled and measured_steps == 0:
-        print(f"benchmark_note:   use --benchmark-steps > {runtime.benchmark.warmup_steps} for steady-state throughput")
-    elif runtime.benchmark.enabled:
-        print(f"benchmark_note:   excluded first {runtime.benchmark.warmup_steps} warmup steps from steady-state metrics")
-    print(f"num_params_M:     {num_params / 1e6:.1f}")
-    print(f"depth:            {runtime.model.depth}")
-    return 0
+    print(f"total_tokens_M:   {state.step * total_batch_size / 1e6:.1f}")
+    print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
+    print("---")

@@ -16,6 +16,7 @@ To set up a new experiment, work with the user to:
    - `autoresearch_trainer/model.py` — model architecture.
    - `autoresearch_trainer/optimizer.py` — optimizer implementation.
    - `autoresearch_trainer/runner.py` — training loop and benchmark output.
+   - `autoresearch_trainer/utils/platform.py` — environment configuration and OS compatibility hacks.
    - `benchmarks/KEY_FINDINGS.md` — current benchmark conclusions if the task is performance tuning.
 4. **Verify data exists**: Check that `~/.cache/autoresearch/` contains data shards and a tokenizer. If not, tell the human to run `uv run prepare.py`.
 5. **Initialize results.tsv**: Create `results.tsv` with just the header row. The baseline will be recorded after the first run.
@@ -61,10 +62,12 @@ num_params_M:     50.3
 depth:            8
 ```
 
-Note that the script is configured to always stop after 5 minutes, so depending on the computing platform of this computer the numbers might look different. You can extract the key metric from the log file:
+Note that the script is configured to always stop after 5 minutes, so depending on the computing platform of this computer the numbers might look different. You can extract the key metric from the log file or the structured JSONL output:
 
 ```
 grep "^val_bpb:" run.log
+# Or via the generated output
+cat metrics.jsonl
 ```
 
 ## Logging results

@@ -32,6 +32,7 @@ class ModelSettings:
     activation_checkpoint: str
     default_device_batch_size: int
     device_batch_size: int
+    vocab_size: int
     ve_gate_channels: int
     softcap: float
 
@@ -145,6 +146,11 @@ def env_override_float(name: str, default: float) -> float:
     return float(override) if override is not None else default
 
 
+def env_override_float(name: str, default: float) -> float:
+    override = os.environ.get(name)
+    return float(override) if override is not None else default
+
+
 def pick_device_batch_size(default_batch_size: int) -> int:
     return env_override_int("DEVICE_BATCH_SIZE", default_batch_size)
 
@@ -196,8 +202,8 @@ def parse_args(available_inductor_modes: list[str]) -> argparse.Namespace:
     args = parser.parse_args()
     if args.benchmark_steps < 0:
         parser.error("--benchmark-steps must be >= 0")
-    if args.grad_accum_steps < 0:
-        parser.error("--grad-accum-steps must be >= 0")
+    if args.grad_accum_steps <= 0:
+        parser.error("--grad-accum-steps must be >= 1")
     return args
 
 
@@ -206,6 +212,7 @@ def build_runtime_config(
     *,
     model_compile_backend: str,
     optimizer_compile_backend: str,
+    vocab_size: int,
 ) -> RuntimeConfig:
     profile = EXPERIMENT_PROFILES[args.experiment_profile]
     model_settings = ModelSettings(
@@ -217,6 +224,7 @@ def build_runtime_config(
         activation_checkpoint=env_override_str("ACTIVATION_CHECKPOINT", profile.activation_checkpoint),
         default_device_batch_size=profile.device_batch_size,
         device_batch_size=pick_device_batch_size(profile.device_batch_size),
+        vocab_size=vocab_size,
         ve_gate_channels=env_override_int("VE_GATE_CHANNELS", VE_GATE_CHANNELS),
         softcap=env_override_float("SOFTCAP", SOFTCAP),
     )

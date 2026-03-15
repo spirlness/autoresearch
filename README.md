@@ -76,6 +76,7 @@ The `program.md` file is essentially a super lightweight "skill".
 prepare.py                 — fixed data prep + evaluation harness
 train.py                   — thin entrypoint
 autoresearch_trainer/      — modular training runtime
+    utils/platform.py      — isolated OS and environment hacks
 benchmarks/                — benchmark archive + preserved findings
 program.md                 — agent instructions
 verify_flash_attn.py       — local Flash Attention smoke test
@@ -85,10 +86,11 @@ vendor/                    — pinned Windows wheel(s) required by uv
 
 ## Design choices
 
-- **Small modular core.** The training code is split by responsibility so it stays easy to read and easier to extend than a monolithic script.
+- **Small modular core.** The training code is split by responsibility so it stays easy to read and easier to extend than a monolithic script. The main loop is fully object-oriented via a `Trainer` class and `TrainingState` data class, providing isolated state tracking and clean execution contexts.
 - **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
 - **Validated profiles.** High-throughput and high-MFU settings are kept as named profiles instead of being scattered through ad-hoc notes.
 - **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
+- **Agent-Ready Analytics.** The trainer automatically emits structured `metrics.jsonl` files per run so that external swarms, reinforcement scripts, or plotting utilities can ingest throughput, loss, and MFU histories deterministically without manual log scraping.
 
 ## Windows notes
 
