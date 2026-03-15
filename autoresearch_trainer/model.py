@@ -6,6 +6,7 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from .optimizer import MuonAdamW
 
@@ -64,9 +65,12 @@ class GPTConfig:
     n_kv_head: int = 6
     n_embd: int = 768
     window_pattern: str = "SSSL"
+    activation_checkpoint: str = "none"
 
 
-def build_model_config(*, depth, max_seq_len, vocab_size, aspect_ratio, head_dim, window_pattern):
+def build_model_config(*, depth, max_seq_len, vocab_size, aspect_ratio, head_dim, window_pattern, activation_checkpoint):
+    # Width is derived from depth*aspect_ratio, then rounded to a whole number
+    # of heads so the profile knobs stay simple while tensor shapes stay legal.
     base_dim = depth * aspect_ratio
     model_dim = ((base_dim + head_dim - 1) // head_dim) * head_dim
     num_heads = model_dim // head_dim
@@ -78,6 +82,7 @@ def build_model_config(*, depth, max_seq_len, vocab_size, aspect_ratio, head_dim
         n_kv_head=num_heads,
         n_embd=model_dim,
         window_pattern=window_pattern,
+        activation_checkpoint=activation_checkpoint,
     )
 
 
@@ -86,6 +91,8 @@ def norm(x):
 
 
 def has_ve(layer_idx, n_layer):
+    # Value embeddings are only enabled on alternating layers, matching the
+    # original small-model recipe this project evolved from.
     return layer_idx % 2 == (n_layer - 1) % 2
 
 
@@ -154,10 +161,17 @@ class Block(nn.Module):
         super().__init__()
         self.attn = CausalSelfAttention(config, layer_idx, attention_op)
         self.mlp = MLP(config)
+        self.activation_checkpoint = config.activation_checkpoint
 
     def forward(self, x, ve, cos_sin, window_size):
         x = x + self.attn(norm(x), ve, cos_sin, window_size)
-        x = x + self.mlp(norm(x))
+        mlp_input = norm(x)
+        if self.activation_checkpoint == "mlp_only" and self.training and torch.is_grad_enabled():
+            # Checkpointing only the MLP keeps the larger activation branch cheap
+            # enough to fit wider profiles without recomputing attention.
+            x = x + checkpoint(self.mlp, mlp_input, use_reentrant=False)
+        else:
+            x = x + self.mlp(mlp_input)
         return x
 
 
@@ -165,6 +179,8 @@ class GPT(nn.Module):
     def __init__(self, config, attention_op):
         super().__init__()
         self.config = config
+        if config.activation_checkpoint not in {"none", "mlp_only"}:
+            raise ValueError(f"Unsupported activation checkpoint mode: {config.activation_checkpoint}")
         self.window_sizes = self._compute_window_sizes(config)
         self.transformer = nn.ModuleDict(
             {
@@ -238,12 +254,16 @@ class GPT(nn.Module):
         assert all(c in "SL" for c in pattern)
         long_window = config.sequence_len
         short_window = long_window // 2
+        # Repeat the user-facing pattern string across layers so profiles can
+        # switch attention layouts with a short token like `SSSL` or `LLLL`.
         char_to_window = {"L": (long_window, 0), "S": (short_window, 0)}
         window_sizes = [char_to_window[pattern[layer_idx % len(pattern)]] for layer_idx in range(config.n_layer)]
         window_sizes[-1] = (long_window, 0)
         return window_sizes
 
     def estimate_flops(self):
+        # This intentionally uses the same approximate token FLOP accounting for
+        # every benchmark so MFU comparisons stay consistent across experiments.
         nparams = sum(p.numel() for p in self.parameters())
         value_embeds_numel = sum(ve.weight.numel() for ve in self.value_embeds.values())
         nparams_exclude = (
@@ -315,6 +335,8 @@ class GPT(nn.Module):
             dict(kind="adamw", params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
             dict(kind="adamw", params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
         ]
+        # Muon operates on same-shaped 2D matrices as grouped stacks; everything
+        # else stays on AdamW where scalar and embedding behavior is simpler.
         for shape in sorted({p.shape for p in matrix_params}):
             group_params = [p for p in matrix_params if p.shape == shape]
             param_groups.append(
@@ -348,15 +370,19 @@ class GPT(nn.Module):
 
     def compute_loss(self, x, targets=None, reduction="mean"):
         softcap = 15
-        logits = self.lm_head(x).float()
-        logits = softcap * torch.tanh(logits / softcap)
         if targets is not None:
+            flat_hidden = x.reshape(-1, x.size(-1))
+            flat_targets = targets.reshape(-1)
+            logits = F.linear(flat_hidden, self.lm_head.weight).float()
+            logits = torch.tanh(logits / softcap) * softcap
             return F.cross_entropy(
-                logits.view(-1, logits.size(-1)),
-                targets.view(-1),
+                logits,
+                flat_targets,
                 ignore_index=-1,
                 reduction=reduction,
             )
+        logits = F.linear(x, self.lm_head.weight).float()
+        logits = torch.tanh(logits / softcap) * softcap
         return logits
 
     def forward(self, idx, targets=None, reduction="mean"):

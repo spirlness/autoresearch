@@ -73,6 +73,8 @@ def _build_execution_functions(raw_model, runtime, autocast_ctx, grad_accum_step
             dynamic=False,
         )
     elif runtime.compile.use_compiled_trunk:
+        # `trunk` scope keeps embedding/loss eager while compiling the deep stack
+        # of transformer blocks, which is useful for isolating compile issues.
         trunk_fn = maybe_compile_function(
             run_trunk_forward,
             backend=runtime.compile.model_backend,
@@ -120,6 +122,7 @@ def main() -> int:
         aspect_ratio=runtime.model.aspect_ratio,
         head_dim=runtime.model.head_dim,
         window_pattern=runtime.model.window_pattern,
+        activation_checkpoint=runtime.model.activation_checkpoint,
     )
 
     print(f"Vocab size: {vocab_size:,}")
@@ -209,7 +212,8 @@ def main() -> int:
 
     t_start_training = time.time()
     smooth_train_loss = 0.0
-    total_training_time = 0.0
+    elapsed_training_time = 0.0
+    steady_training_time = 0.0
     step = 0
     measured_steps = 0
     step_timer_start = torch.cuda.Event(enable_timing=True)
@@ -225,6 +229,8 @@ def main() -> int:
         loss_value = None
         for _ in range(grad_accum_steps):
             if runtime.compile.use_compiled_execution:
+                # Tell cudagraph-backed modes that each microstep is a fresh replay
+                # boundary; without this, tensor lifetime reuse becomes fragile.
                 torch.compiler.cudagraph_mark_step_begin()
             if runtime.compile.scope == "microstep":
                 train_loss = microstep_fn(x, y)
@@ -244,9 +250,14 @@ def main() -> int:
                     loss = model_for_execution(x, y)
                 loss_value = loss.detach().float()
                 (loss / grad_accum_steps).backward()
+            train_loss_f = loss_value.item()
+            if not math.isfinite(train_loss_f) or train_loss_f > 100:
+                raw_model.zero_grad(set_to_none=True)
+                print(f"FAIL: invalid loss {train_loss_f}", flush=True)
+                return 1
             x, y, epoch = next(train_loader)
 
-        progress = min(total_training_time / runtime.time_budget, 1.0)
+        progress = min(elapsed_training_time / runtime.time_budget, 1.0)
         lrm = get_lr_multiplier(progress)
         muon_momentum = get_muon_momentum(step)
         muon_weight_decay = get_weight_decay(progress)
@@ -261,21 +272,19 @@ def main() -> int:
         step_timer_end.record()
         step_timer_end.synchronize()
         dt = step_timer_start.elapsed_time(step_timer_end) / 1000.0
-        train_loss_f = loss_value.item() if loss_value is not None else 0.0
+        elapsed_training_time += dt
         is_benchmark_warmup = runtime.benchmark.enabled and step < runtime.benchmark.warmup_steps
 
-        if math.isnan(train_loss_f) or train_loss_f > 100:
-            print("FAIL")
-            return 1
-
         if (runtime.benchmark.enabled and not is_benchmark_warmup) or (not runtime.benchmark.enabled and step > 10):
-            total_training_time += dt
+            # Exclude cold-start compile steps from benchmark metrics, and give
+            # full training runs a short settle period before averaging throughput.
+            steady_training_time += dt
             measured_steps += 1
 
         ema_beta = 0.9
         smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
         debiased_smooth_loss = smooth_train_loss / (1 - ema_beta ** (step + 1))
-        pct_done = 100 * progress
+        pct_done = 100 * min(elapsed_training_time / runtime.time_budget, 1.0)
         tok_per_sec = total_batch_size / dt
         if is_benchmark_warmup:
             tok_per_sec_str = "warmup"
@@ -292,7 +301,7 @@ def main() -> int:
             remaining_str = f"{max(runtime.benchmark.steps - (step + 1), 0)} steps"
             progress_str = f"{100 * (step + 1) / runtime.benchmark.steps:.1f}%"
         else:
-            remaining_str = f"{max(0, runtime.time_budget - total_training_time):.0f}s"
+            remaining_str = f"{max(0.0, runtime.time_budget - elapsed_training_time):.0f}s"
             progress_str = f"{pct_done:.1f}%"
 
         should_log = (
@@ -320,7 +329,7 @@ def main() -> int:
 
         if runtime.benchmark.enabled and step >= runtime.benchmark.steps:
             break
-        if not runtime.benchmark.enabled and step > 10 and total_training_time >= runtime.time_budget:
+        if not runtime.benchmark.enabled and elapsed_training_time >= runtime.time_budget:
             break
 
     total_tokens = step * total_batch_size
@@ -334,10 +343,12 @@ def main() -> int:
     t_end = time.time()
     startup_time = t_start_training - t_start
     steady_tok_per_sec = (
-        total_batch_size * measured_steps / total_training_time
-        if total_training_time > 0 and measured_steps > 0
+        total_batch_size * measured_steps / steady_training_time
+        if steady_training_time > 0 and measured_steps > 0
         else None
     )
+    # All summary throughput/MFU numbers are reported on the measured steady-state
+    # window, not on the full wall-clock run including compile/startup overhead.
     steady_train_flops = num_flops_per_token * steady_tok_per_sec if steady_tok_per_sec is not None else None
     steady_state_mfu = compute_mfu(device_peak_flops, num_flops_per_token, steady_tok_per_sec)
     steady_state_h100_mfu = compute_mfu(H100_BF16_PEAK_FLOPS, num_flops_per_token, steady_tok_per_sec)
@@ -361,7 +372,8 @@ def main() -> int:
         print(f"val_bpb:          {val_bpb:.6f}")
     else:
         print("val_bpb:          skipped")
-    print(f"training_seconds: {total_training_time:.1f}")
+    print(f"training_seconds: {elapsed_training_time:.1f}")
+    print(f"steady_training_seconds: {steady_training_time:.1f}")
     print(f"total_seconds:    {t_end - t_start:.1f}")
     print(f"startup_seconds:  {startup_time:.1f}")
     print(f"peak_vram_mb:     {peak_vram_mb:.1f}")

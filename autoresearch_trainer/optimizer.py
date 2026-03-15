@@ -18,8 +18,8 @@ def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_
     p.mul_(1 - lr_t * wd_t)
     exp_avg.lerp_(grad, 1 - beta1_t)
     exp_avg_sq.lerp_(grad.square(), 1 - beta2_t)
-    bias1 = 1 - beta1_t ** step_t
-    bias2 = 1 - beta2_t ** step_t
+    bias1 = 1 - beta1_t**step_t
+    bias2 = 1 - beta2_t**step_t
     denom = (exp_avg_sq / bias2).sqrt() + eps_t
     step_size = lr_t / bias1
     p.add_(exp_avg / denom, alpha=-step_size)
@@ -41,6 +41,8 @@ def muon_step_fused(
     momentum_buffer.lerp_(stacked_grads, 1 - momentum)
     g = stacked_grads.lerp_(momentum_buffer, momentum)
 
+    # Muon's Newton-Schulz update runs on a normalized bf16 copy to keep the
+    # fused kernel cheap while still approximating the matrix orthogonalization.
     x = g.bfloat16()
     x = x / (x.norm(dim=(-2, -1), keepdim=True) * 1.02 + 1e-6)
     if g.size(-2) > g.size(-1):
@@ -69,6 +71,8 @@ def muon_step_fused(
 
     lr = lr_t.to(g.dtype)
     wd = wd_t.to(g.dtype)
+    # Only decay coordinates that agree with the update direction; this matches
+    # the reference Muon implementation's sign-aware decay.
     mask = (g * stacked_params) >= 0
     stacked_params.sub_(lr * g + lr * wd * stacked_params * mask)
 
@@ -108,7 +112,6 @@ class MuonAdamW(torch.optim.Optimizer):
         for p in group["params"]:
             if p.grad is None:
                 continue
-            grad = p.grad
             state = self.state[p]
             if not state:
                 state["step"] = 0
@@ -123,7 +126,7 @@ class MuonAdamW(torch.optim.Optimizer):
             self._adamw_wd_t.fill_(group["weight_decay"])
             self._adamw_step_fn(
                 p,
-                grad,
+                p.grad,
                 state["exp_avg"],
                 state["exp_avg_sq"],
                 self._adamw_step_t,
@@ -148,6 +151,8 @@ class MuonAdamW(torch.optim.Optimizer):
             state_shape = (num_params, shape[-2], 1) if shape[-2] >= shape[-1] else (num_params, 1, shape[-1])
             state["second_momentum_buffer"] = torch.zeros(state_shape, dtype=dtype, device=device)
         red_dim = -1 if shape[-2] >= shape[-1] else -2
+        # Grouping same-shaped matrices lets Muon update them as one compiled
+        # stack, which is much friendlier to torch.compile than per-parameter Python loops.
         stacked_grads = torch.stack([param.grad for param in params])
         stacked_params = torch.stack(params)
         self._muon_momentum_t.fill_(group["momentum"])

@@ -17,6 +17,7 @@ class ExperimentProfile:
     max_seq_len: int
     depth: int
     device_batch_size: int
+    activation_checkpoint: str
     log_interval: int
     benchmark_warmup_steps: int
 
@@ -28,6 +29,7 @@ class ModelSettings:
     window_pattern: str
     max_seq_len: int
     depth: int
+    activation_checkpoint: str
     default_device_batch_size: int
     device_batch_size: int
 
@@ -78,30 +80,33 @@ class RuntimeConfig:
     optimization: OptimizationSettings
 
 
-BASELINE_PROFILE = ExperimentProfile(
+THROUGHPUT_PROFILE = ExperimentProfile(
     aspect_ratio=64,
     window_pattern="SSSL",
     max_seq_len=2048,
     depth=8,
     device_batch_size=12,
+    activation_checkpoint="none",
     log_interval=1,
     benchmark_warmup_steps=2,
 )
 
 MFU50_PROFILE = ExperimentProfile(
-    aspect_ratio=80,
+    aspect_ratio=85,
     window_pattern="LLLL",
     max_seq_len=4096,
-    depth=8,
+    depth=9,
     device_batch_size=5,
+    activation_checkpoint="mlp_only",
     log_interval=10,
     benchmark_warmup_steps=2,
 )
 
 EXPERIMENT_PROFILES = {
-    "baseline": BASELINE_PROFILE,
-    "default": BASELINE_PROFILE,
+    "baseline": MFU50_PROFILE,
+    "default": MFU50_PROFILE,
     "mfu50": MFU50_PROFILE,
+    "throughput": THROUGHPUT_PROFILE,
 }
 
 HEAD_DIM = 128
@@ -139,7 +144,7 @@ def parse_args(available_inductor_modes: list[str]) -> argparse.Namespace:
         "--experiment-profile",
         choices=sorted(EXPERIMENT_PROFILES.keys()),
         default="baseline",
-        help="Select the validated throughput baseline or an MFU-focused experiment profile.",
+        help="Select the deeper near-50 percent MFU baseline or the preserved throughput-oriented profile.",
     )
     parser.add_argument(
         "--benchmark-steps",
@@ -198,6 +203,7 @@ def build_runtime_config(
         window_pattern=env_override_str("WINDOW_PATTERN", profile.window_pattern),
         max_seq_len=env_override_int("MAX_SEQ_LEN", profile.max_seq_len),
         depth=env_override_int("DEPTH", profile.depth),
+        activation_checkpoint=env_override_str("ACTIVATION_CHECKPOINT", profile.activation_checkpoint),
         default_device_batch_size=profile.device_batch_size,
         device_batch_size=pick_device_batch_size(profile.device_batch_size),
     )

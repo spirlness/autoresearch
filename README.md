@@ -48,14 +48,15 @@ If the above commands all work ok, your setup is working and you can go into aut
 
 Two validated profiles are built in:
 
-- `baseline` / `default` — throughput-first default for day-to-day runs
-- `mfu50` — utilization-first profile tuned to cross `50% MFU` on the current Windows RTX 3060 setup
+- `baseline` / `default` / `mfu50` — the deeper default, using MLP-only checkpointing to stay near `50% MFU` on the current Windows RTX 3060 setup
+- `throughput` — the preserved higher-`tok/s` profile for day-to-day throughput comparisons
 
 Examples:
 
 ```bash
 uv run train.py --benchmark-steps 20
 uv run train.py --experiment-profile baseline --benchmark-steps 20
+uv run train.py --experiment-profile throughput --benchmark-steps 20
 uv run train.py --experiment-profile mfu50 --benchmark-steps 20
 ```
 

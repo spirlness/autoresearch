@@ -31,11 +31,12 @@ Expected outcome:
 uv run train.py
 uv run python -m autoresearch_trainer
 uv run train.py --benchmark-steps 20
+uv run train.py --experiment-profile throughput --benchmark-steps 20
 uv run train.py --experiment-profile mfu50 --benchmark-steps 20
 ```
 
 ## Notes
 
 - `train.py` is a thin entrypoint; the real training runtime lives in `autoresearch_trainer/`.
-- The current throughput-first and MFU-first defaults are documented in `benchmarks/KEY_FINDINGS.md`.
+- The current default baseline is the deeper near-50%-MFU profile with MLP-only checkpointing; the old throughput-oriented profile is preserved as `throughput`.
 - The detailed benchmark table is in `benchmarks/SUMMARY_2026-03-15.md`.

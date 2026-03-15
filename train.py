@@ -5,6 +5,7 @@ Usage:
     uv run train.py
     uv run train.py --benchmark-steps 5
     uv run train.py --experiment-profile baseline
+    uv run train.py --experiment-profile throughput
     uv run train.py --experiment-profile mfu50 --benchmark-steps 20
 """
 

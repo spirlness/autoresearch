@@ -59,6 +59,8 @@ def find_vcvars64() -> str | None:
     if os.name != "nt":
         return None
 
+    # Prefer the same discovery path as a Developer Command Prompt before
+    # falling back to broad filesystem globs.
     vswhere_candidates: list[str] = []
     env_vswhere = os.environ.get("VSWHERE")
     if env_vswhere:
@@ -113,6 +115,8 @@ def find_vcvars64() -> str | None:
 
 
 def load_windows_msvc_env(vcvars64_path: str) -> None:
+    # `vcvars64.bat` mutates a cmd.exe session; capture its final `set` output
+    # and mirror those variables into the current Python process.
     command = f'call "{vcvars64_path}" >nul && set'
     result = subprocess.run(
         command,
@@ -169,6 +173,8 @@ def maybe_configure_msvc_utf8_help(compiler: str | None) -> str | None:
     if os.name != "nt" or compiler is None:
         return None
 
+    # Some Windows toolchains emit UTF-8 help text even when Inductor's MSVC
+    # probe expects a locale-specific codec, so patch the probe once up front.
     help_output = subprocess.check_output([compiler, "/help"], stderr=subprocess.STDOUT)
     try:
         help_output.decode(*cpp_builder.SUBPROCESS_DECODE_ARGS)
@@ -206,6 +212,8 @@ def prepare_compile_environment(
 def maybe_compile_function(fn, *, backend: str, compile_mode: str, **kwargs):
     if backend == "off":
         return fn
+    # Keep the compile call in one helper so the model/runtime code can switch
+    # between eager and compiled paths without repeating backend plumbing.
     compile_kwargs: dict[str, Any] = {"backend": backend, **kwargs}
     if backend == "inductor":
         compile_kwargs["mode"] = compile_mode
