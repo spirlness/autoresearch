@@ -85,7 +85,9 @@ class Trainer:
         self.raw_model = GPT(self.model_config, attention_op=self.attention_op).to(self.device)
         self.raw_model.init_weights()
         self.num_params = sum(p.numel() for p in self.raw_model.parameters())
-        self.num_flops_per_token = 6 * self.num_params
+        # Keep MFU reporting aligned with the historical benchmark tables by
+        # using the model-level FLOP estimate instead of a raw parameter count.
+        self.num_flops_per_token = self.raw_model.estimate_flops()
         
         # Optimizer & Scheduler
         self.optimizer = self.raw_model.setup_optimizer(
