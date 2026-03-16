@@ -35,4 +35,3 @@ error.log
 metrics.jsonl
 
 # Test artifacts
-test_*.py
