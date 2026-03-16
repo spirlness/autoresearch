@@ -15,10 +15,10 @@
 - [x] Task: Implement `autoresearch_trainer/mutator.py` 25c4b03
 - [x] Task: Conductor - User Manual Verification 'Code/Config Mutator' (Protocol in workflow.md) 5e20e19
 
-## Phase 4: End-to-End Loop Integration
-- [ ] Task: Write Tests for `runner.py` research loop coordination
-- [ ] Task: Implement integrated research loop in `autoresearch_trainer/runner.py`
-- [ ] Task: Conductor - User Manual Verification 'End-to-End Loop Integration' (Protocol in workflow.md)
+## Phase 4: End-to-End Loop Integration [checkpoint: 631c06a]
+- [x] Task: Write Tests for `runner.py` research loop coordination 5161e9b
+- [x] Task: Implement integrated research loop in `autoresearch_trainer/runner.py` 5161e9b
+- [x] Task: Conductor - User Manual Verification 'End-to-End Loop Integration' (Protocol in workflow.md) 631c06a
 
 ## Phase 5: Verification & Success Demonstration
 - [ ] Task: Conduct a 3-experiment run and verify results
