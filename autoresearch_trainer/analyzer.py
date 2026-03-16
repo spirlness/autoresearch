@@ -33,14 +33,14 @@ def get_summary(metrics_path: str, ledger_path: str) -> Dict[str, Any]:
     if ledger:
         # Take the last entry from the ledger for final stats
         last_run = ledger[-1]
-        summary["val_bpb"] = last_run.get("val_bpb")
-        summary["tok_per_sec"] = last_run.get("end_to_end_tok_per_sec")
-        summary["peak_vram_mb"] = last_run.get("peak_vram_mb")
+        summary["val_bpb"] = last_run.get("val_bpb", float("inf"))
+        summary["tok_per_sec"] = last_run.get("end_to_end_tok_per_sec", 0.0)
+        summary["peak_vram_mb"] = last_run.get("peak_vram_mb", 0.0)
     
     if metrics:
         # Take the last entry from metrics for the final step loss
         last_step = metrics[-1]
-        summary["loss"] = last_step.get("loss")
-        summary["step"] = last_step.get("step")
+        summary["loss"] = last_step.get("loss", float("inf"))
+        summary["step"] = last_step.get("step", 0)
         
     return summary

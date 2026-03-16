@@ -35,3 +35,6 @@ error.log
 metrics.jsonl
 
 # Test artifacts
+
+.gemini/
+gha-creds-*.json

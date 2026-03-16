@@ -471,30 +471,36 @@ def _compile_status(runtime):
 
 
 from .analyzer import get_summary
-from .mutator import mutate_config
 from .orchestrator import run_experiment
 
-def run_research_loop(iterations: int = 3, timeout: int = 300) -> list[dict[str, Any]]:
+def run_research_loop(iterations: int = 3, timeout: int = 300, extra_args: list[str] = None) -> list[dict[str, Any]]:
     """Execute the end-to-end research loop."""
     results = []
-    config_path = os.path.join(os.path.dirname(__file__), "config.py")
+    
+    # We maintain a dict of env vars that gets updated across iterations
+    current_env_vars = {}
     
     for i in range(iterations):
         print(f"\n--- Research Iteration {i+1}/{iterations} ---")
-        
+        if current_env_vars:
+            print(f"Current overrides: {current_env_vars}")
+            
         # 1. Run Experiment
-        # We run with extra_args to ensure we don't accidentally recurse
-        # though orchestrator by default runs just 'train.py'
-        experiment_res = run_experiment(timeout=timeout, profile="baseline")
+        experiment_res = run_experiment(timeout=timeout, profile="baseline", extra_args=extra_args, env_vars=current_env_vars)
         
         # 2. Analyze Results
-        summary = get_summary("metrics.jsonl", "experiment_ledger.jsonl")
+        summary = {}
+        if experiment_res.get("status") == "success":
+            summary = get_summary("metrics.jsonl", "experiment_ledger.jsonl")
+        else:
+            print(f"Iteration {i+1} experiment did not succeed: {experiment_res.get('status')}")
         
         # Record iteration result
         iteration_result = {
             "iteration": i + 1,
             "experiment": experiment_res,
-            "summary": summary
+            "summary": summary,
+            "applied_env_vars": current_env_vars.copy()
         }
         results.append(iteration_result)
         
@@ -502,13 +508,11 @@ def run_research_loop(iterations: int = 3, timeout: int = 300) -> list[dict[str,
         
         # 3. Mutate (if not last iteration)
         if i < iterations - 1:
-            # Simple heuristic: adjust learning rate if loss is high?
-            # For now, let's just do a dummy mutation to prove the logic
-            # In a real system, this would be an AI agent's logic
-            curr_lr = summary.get("loss", 0) # Dummy use
-            mutations = {"EMBEDDING_LR": 0.6 * (0.9 ** (i + 1))}
-            mutate_config(config_path, mutations)
-            print(f"Mutated config for next iteration: {mutations}")
+            # TODO: Implement a more advanced mutation strategy (e.g., Bayesian Optimization)
+            # For now, we use a simple linear progression as a demo
+            next_lr = round(0.4 + (i * 0.05), 4)
+            current_env_vars["EMBEDDING_LR"] = str(next_lr)
+            print(f"Prepared env overrides for next iteration: {current_env_vars}")
             
     return results
 
@@ -585,6 +589,10 @@ def main() -> int:
             new_batch_size = max(1, runtime.model.device_batch_size // 2)
             ratio = runtime.model.device_batch_size // new_batch_size
             new_grad_accum = runtime.grad_accum_steps_override * ratio
+
+            print(f"[System] Adjusted config: device_batch_size={new_batch_size}, grad_accum_steps={new_grad_accum}")
+            with open("experiment_ledger.jsonl", "a") as f:
+                f.write(json.dumps({"event": "OOM_RECOVERY", "new_device_batch_size": new_batch_size, "new_grad_accum_steps": new_grad_accum}) + "\n")
 
             new_model = dataclasses.replace(
                 runtime.model, device_batch_size=new_batch_size

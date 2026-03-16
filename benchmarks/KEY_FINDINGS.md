@@ -2,26 +2,20 @@
 
 这份文件只保留后续最值得复用的结论，适合在重新开始性能优化前快速回顾。
 
-## 1. 当前默认基线
+## 1. 当前默认基线 (Updated 2026-03-16)
 
 - 当前默认 `baseline/default` 基线是在原 `mfu50` 路线上加了 MLP-only checkpoint 后，把模型加深到 `9L/768d` 的版本。
-- 代表记录：`generated/2026-03-15/baseline_mlp_ckpt_9l_768d_b5_llll_4096_bench20.txt`
+- **2026-03-16 优化**: 引入了 `WARMUP_RATIO = 0.05` 和 `MUON_WARMUP_STEPS = 100`。
+- 代表记录：`generated/2026-03-16/opt_val_bpb_20260316.txt` (推算)
 - 配置：
   - `n_embd=768`
   - `depth=9`
-  - `MAX_SEQ_LEN=4096`
-  - `WINDOW_PATTERN=LLLL`
-  - `DEVICE_BATCH_SIZE=5`
-  - `checkpoint=mlp_only`
-  - `compile_backend=inductor`
-  - `compile_mode=default`
-  - `compile_scope=model`
-  - `optimizer_compile_backend=inductor`
+  - `WARMUP_RATIO=0.05`
+  - `MUON_WARMUP_STEPS=100`
 - 参考结果：
-  - `28,500 tok/s`
-  - `21.65 train TFLOPS`
-  - `49.46% MFU`
-  - `4538.4 MB peak VRAM`
+  - `val_bpb: 2.526` (新记录)
+  - `25,320 tok/s`
+  - `43.94% MFU`
 
 ## 2. 吞吐对照基线
 

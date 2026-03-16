@@ -1,0 +1,8 @@
+﻿{
+    "description":  "自主优化训练配置以降低 val_bpb",
+    "track_id":  "opt_val_bpb_20260316",
+    "type":  "feature",
+    "created_at":  "2026-03-16T16:02:02Z",
+    "status":  "new",
+    "updated_at":  "2026-03-16T16:02:02Z"
+}

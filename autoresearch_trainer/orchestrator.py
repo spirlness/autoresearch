@@ -1,44 +1,60 @@
 import subprocess
 import time
-from typing import Dict, Any
+import os
+from typing import Dict, Any, List
 
-def run_experiment(timeout: int = 300, profile: str = "baseline") -> Dict[str, Any]:
+def run_experiment(timeout: int = 300, profile: str = "baseline", extra_args: List[str] = None, env_vars: Dict[str, str] = None) -> Dict[str, Any]:
     """Run train.py as a subprocess with a timeout."""
     cmd = ["uv", "run", "train.py"]
     if profile:
         cmd.extend(["--experiment-profile", profile])
+    if extra_args:
+        cmd.extend(extra_args)
+        
+    env = os.environ.copy()
+    if env_vars:
+        env.update(env_vars)
     
     start_time = time.time()
     try:
-        # We use subprocess.run with timeout
-        # capture_output=True to keep console clean, or False to see progress
-        result = subprocess.run(
-            cmd,
-            timeout=timeout,
-            capture_output=True,
-            text=True
-        )
+        # We redirect stdout/stderr to files to avoid memory pressure from large logs
+        with open("experiment_stdout.log", "w", encoding="utf-8") as f_out, \
+             open("experiment_stderr.log", "w", encoding="utf-8") as f_err:
+            
+            result = subprocess.run(
+                cmd,
+                timeout=timeout,
+                stdout=f_out,
+                stderr=f_err,
+                text=True,
+                env=env
+            )
+        
         elapsed = time.time() - start_time
         
+        # Read the tail of logs if needed, or just return paths
         if result.returncode == 0:
             return {
                 "status": "success",
                 "returncode": 0,
                 "elapsed": elapsed,
-                "stdout": result.stdout,
-                "stderr": result.stderr
+                "stdout_path": "experiment_stdout.log",
+                "stderr_path": "experiment_stderr.log"
             }
         else:
             return {
                 "status": "failed",
                 "returncode": result.returncode,
                 "elapsed": elapsed,
-                "stdout": result.stdout,
-                "stderr": result.stderr
+                "stdout_path": "experiment_stdout.log",
+                "stderr_path": "experiment_stderr.log"
             }
             
-    except subprocess.TimeoutExpired:
+    except subprocess.TimeoutExpired as exc:
         elapsed = time.time() - start_time
+        # In a more advanced setup, we might need to hunt down child processes
+        # or use taskkill on Windows to ensure GPU memory is released.
+        print(f"[Warning] Experiment timed out. Attempting to ensure resources are freed.")
         return {
             "status": "timeout",
             "elapsed": elapsed,

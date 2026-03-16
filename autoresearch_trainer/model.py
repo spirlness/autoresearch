@@ -12,13 +12,18 @@ from .optimizer import MuonAdamW
 
 
 def resolve_attention_backend():
+    import warnings
     if os.name == "nt":
         try:
             from flash_attn import flash_attn_func
 
             return "flash_attn", flash_attn_func
         except ImportError:
-            pass
+            warnings.warn(
+                "[autoresearch] flash_attn not found on Windows. Falling back to default kernels. "
+                "This will significantly reduce throughput. Consider installing the pre-built wheel.",
+                stacklevel=2,
+            )
 
     from kernels import get_kernel
 
@@ -440,8 +445,30 @@ class GPT(nn.Module):
         ]
         # Muon operates on same-shaped 2D matrices as grouped stacks; everything
         # else stays on AdamW where scalar and embedding behavior is simpler.
-        for shape in sorted({p.shape for p in matrix_params}):
-            group_params = [p for p in matrix_params if p.shape == shape]
+        muon_params = []
+        adam_fallback_params = []
+        for p in matrix_params:
+            if p.ndim == 2:
+                muon_params.append(p)
+            else:
+                adam_fallback_params.append(p)
+                
+        if adam_fallback_params:
+            import warnings
+            warnings.warn(f"Found {len(adam_fallback_params)} non-2D parameters in matrix_params. Falling back to AdamW for these.", stacklevel=2)
+            param_groups.append(
+                dict(
+                    kind="adamw",
+                    params=adam_fallback_params,
+                    lr=matrix_lr,
+                    betas=adam_betas,
+                    eps=1e-10,
+                    weight_decay=weight_decay,
+                )
+            )
+
+        for shape in sorted({p.shape for p in muon_params}):
+            group_params = [p for p in muon_params if p.shape == shape]
             param_groups.append(
                 dict(
                     kind="muon",

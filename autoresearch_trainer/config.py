@@ -115,7 +115,7 @@ EXPERIMENT_PROFILES = {
 
 HEAD_DIM = 128
 TIME_BUDGET_DEFAULT = 300
-EMBEDDING_LR = 0.6
+EMBEDDING_LR = 0.486
 UNEMBEDDING_LR = 0.004
 MATRIX_LR = 0.04
 SCALAR_LR = 0.5
@@ -260,15 +260,15 @@ def build_runtime_config(
         target_mfu_percent=TARGET_MFU_PERCENT,
     )
     optimization_settings = OptimizationSettings(
-        embedding_lr=EMBEDDING_LR,
-        unembedding_lr=UNEMBEDDING_LR,
-        matrix_lr=MATRIX_LR,
-        scalar_lr=SCALAR_LR,
-        weight_decay=WEIGHT_DECAY,
+        embedding_lr=env_override_float("EMBEDDING_LR", EMBEDDING_LR),
+        unembedding_lr=env_override_float("UNEMBEDDING_LR", UNEMBEDDING_LR),
+        matrix_lr=env_override_float("MATRIX_LR", MATRIX_LR),
+        scalar_lr=env_override_float("SCALAR_LR", SCALAR_LR),
+        weight_decay=env_override_float("WEIGHT_DECAY", WEIGHT_DECAY),
         adam_betas=ADAM_BETAS,
-        warmup_ratio=WARMUP_RATIO,
-        warmdown_ratio=WARMDOWN_RATIO,
-        final_lr_frac=FINAL_LR_FRAC,
+        warmup_ratio=env_override_float("WARMUP_RATIO", WARMUP_RATIO),
+        warmdown_ratio=env_override_float("WARMDOWN_RATIO", WARMDOWN_RATIO),
+        final_lr_frac=env_override_float("FINAL_LR_FRAC", FINAL_LR_FRAC),
         muon_warmup_steps=env_override_int("MUON_WARMUP_STEPS", MUON_WARMUP_STEPS),
     )
     return RuntimeConfig(
