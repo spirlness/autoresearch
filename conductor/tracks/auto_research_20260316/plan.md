@@ -10,10 +10,10 @@
 - [x] Task: Implement `autoresearch_trainer/orchestrator.py` 22812a7
 - [x] Task: Conductor - User Manual Verification 'Experiment Orchestrator' (Protocol in workflow.md) 335d901
 
-## Phase 3: Code/Config Mutator
-- [ ] Task: Write Tests for `mutator.py` (modifying `config.py` and code files)
-- [ ] Task: Implement `autoresearch_trainer/mutator.py`
-- [ ] Task: Conductor - User Manual Verification 'Code/Config Mutator' (Protocol in workflow.md)
+## Phase 3: Code/Config Mutator [checkpoint: 5e20e19]
+- [x] Task: Write Tests for `mutator.py` (modifying `config.py` and code files) 25c4b03
+- [x] Task: Implement `autoresearch_trainer/mutator.py` 25c4b03
+- [x] Task: Conductor - User Manual Verification 'Code/Config Mutator' (Protocol in workflow.md) 5e20e19
 
 ## Phase 4: End-to-End Loop Integration
 - [ ] Task: Write Tests for `runner.py` research loop coordination
