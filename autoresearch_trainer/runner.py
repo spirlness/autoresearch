@@ -343,6 +343,70 @@ class Trainer:
         with open("metrics.jsonl", "a") as f:
             f.write(json.dumps(metrics) + "\n")
 
+    def _update_optimizer_params(self):
+        state = self.state
+        runtime = self.runtime
+        total_steps_est = (
+            runtime.benchmark.steps if runtime.benchmark.enabled else 1000000
+        )
+        lrm = self.lr_func(state.step, total_steps_est)
+        muon_momentum = self._get_muon_momentum(state.step)
+        for param_group in self.optimizer.param_groups:
+            param_group["lr"] = param_group["initial_lr"] * lrm
+            if param_group["kind"] == "muon":
+                param_group["momentum"] = muon_momentum
+
+    def _run_training_step(self, train_loader, grad_accum_steps):
+        self.optimizer.zero_grad(set_to_none=True)
+        loss = None
+        epoch = 0
+        for _ in range(grad_accum_steps):
+            x, y, epoch = next(train_loader)
+            loss = self.microstep_fn(x, y)
+        self.optimizer.step()
+        return loss, epoch
+
+    def _finalize_step(self, dt, loss_val, epoch, actual_total_batch_size):
+        state = self.state
+        runtime = self.runtime
+
+        state.last_dt = dt
+        state.end_to_end_training_time += dt
+
+        if state.lossf_mean is None:
+            state.lossf_mean = loss_val
+        else:
+            state.lossf_mean = state.lossf_mean * 0.95 + loss_val * 0.05
+
+        is_benchmark_warmup = (
+            runtime.benchmark.enabled
+            and (state.step < runtime.benchmark.steps - 1)
+            and (state.step < runtime.benchmark.warmup_steps)
+        )
+        if not is_benchmark_warmup:
+            state.steady_training_time += dt
+            state.measured_steps += 1
+
+        should_log = (
+            state.step == 0
+            or is_benchmark_warmup
+            or ((state.step + 1) % runtime.benchmark.log_interval == 0)
+            or (runtime.benchmark.enabled and state.step + 1 >= runtime.benchmark.steps)
+        )
+
+        if should_log:
+            self._log_metrics(epoch)
+
+        if state.step == 0:
+            gc.collect()
+            gc.freeze()
+            gc.disable()
+        elif (state.step + 1) % 1000 == 0:
+            gc.collect()
+
+        state.step += 1
+        state.tokens_processed = state.step * actual_total_batch_size
+
     def train(self, tokenizer: Tokenizer, train_loader: Any):
         runtime = self.runtime
         state = self.state
@@ -357,7 +421,7 @@ class Trainer:
         grad_accum_steps = runtime.grad_accum_steps_override
 
         # Reset log file
-        with open("metrics.jsonl", "w") as f:
+        with open("metrics.jsonl", "w"):
             pass
 
         print(f"Vocab size: {tokenizer.get_vocab_size():,}")
@@ -374,72 +438,15 @@ class Trainer:
         while True:
             t_step_start = time.time()
 
-            # Learning rate and optimizer parameters
-            total_steps_est = (
-                runtime.benchmark.steps if runtime.benchmark.enabled else 1000000
-            )
-            lrm = self.lr_func(state.step, total_steps_est)
-            muon_momentum = self._get_muon_momentum(state.step)
-            for param_group in self.optimizer.param_groups:
-                param_group["lr"] = param_group["initial_lr"] * lrm
-                if param_group["kind"] == "muon":
-                    param_group["momentum"] = muon_momentum
-
-            # Training step
-            self.optimizer.zero_grad(set_to_none=True)
-            loss = None
-            for _ in range(grad_accum_steps):
-                x, y, epoch = next(train_loader)
-                loss = self.microstep_fn(x, y)
-
-            self.optimizer.step()
+            self._update_optimizer_params()
+            loss, epoch = self._run_training_step(train_loader, grad_accum_steps)
 
             torch.cuda.synchronize()
             t_step_end = time.time()
             dt = t_step_end - t_step_start
-            state.last_dt = dt
-            state.end_to_end_training_time += dt
 
-            # Update metrics
             loss_val = loss.item() if loss is not None else 0.0
-            if state.lossf_mean is None:
-                state.lossf_mean = loss_val
-            else:
-                state.lossf_mean = state.lossf_mean * 0.95 + loss_val * 0.05
-
-            is_benchmark_warmup = (
-                runtime.benchmark.enabled
-                and (state.step < runtime.benchmark.steps - 1)
-                and (state.step < runtime.benchmark.warmup_steps)
-            )
-            if not is_benchmark_warmup:
-                state.steady_training_time += dt
-                state.measured_steps += 1
-
-            # Logging
-            should_log = (
-                state.step == 0
-                or is_benchmark_warmup
-                or ((state.step + 1) % runtime.benchmark.log_interval == 0)
-                or (
-                    runtime.benchmark.enabled
-                    and state.step + 1 >= runtime.benchmark.steps
-                )
-            )
-
-            if should_log:
-                self._log_metrics(epoch)
-
-            # GC Management
-            if state.step == 0:
-                gc.collect()
-                gc.freeze()
-                gc.disable()
-            elif (state.step + 1) % 1000 == 0:
-                gc.collect()
-
-            state.step += 1
-            state.tokens_processed = state.step * actual_total_batch_size
+            self._finalize_step(dt, loss_val, epoch, actual_total_batch_size)
 
             # Termination conditions
             if runtime.benchmark.enabled and state.step >= runtime.benchmark.steps:
@@ -512,7 +519,7 @@ def main() -> int:
         except torch.cuda.OutOfMemoryError as e:
             if attempt == max_retries or runtime.model.device_batch_size <= 1:
                 print(
-                    f"\n[System] OOM: Exhausted retries or reached min batch size. Hardware limit."
+                    "\n[System] OOM: Exhausted retries or reached min batch size. Hardware limit."
                 )
                 with open("metrics.jsonl", "a") as f:
                     f.write(
