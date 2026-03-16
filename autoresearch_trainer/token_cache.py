@@ -184,7 +184,17 @@ def ensure_train_token_cache(
     )
 
 
+import threading
+import queue
+
+
 class TokenWindowLoader:
+    """
+    Asynchronous data loader that samples random sequences from a memory-mapped token cache.
+    Uses a background thread to prefetch data and pin memory, overlapping CPU IO with GPU compute
+    to maximize hardware utilization.
+    """
+
     def __init__(
         self,
         cache_info: TokenCacheInfo,
@@ -216,20 +226,8 @@ class TokenWindowLoader:
         self.generator = torch.Generator(device="cpu")
         self.generator.manual_seed(seed)
 
-        self.host_windows = np.empty((batch_size, self.row_capacity), dtype=self.dtype)
-        self.host_windows_tensor = torch.from_numpy(self.host_windows)
-        self.row_buffer = torch.empty((batch_size, self.row_capacity), dtype=torch.long)
-        self.cpu_buffer = torch.empty(
-            2 * batch_size * sequence_len, dtype=torch.long, pin_memory=True
-        )
         self.gpu_buffer = torch.empty(
             2 * batch_size * sequence_len, dtype=torch.long, device=device
-        )
-        self.cpu_inputs = self.cpu_buffer[: batch_size * sequence_len].view(
-            batch_size, sequence_len
-        )
-        self.cpu_targets = self.cpu_buffer[batch_size * sequence_len :].view(
-            batch_size, sequence_len
         )
         self.inputs = self.gpu_buffer[: batch_size * sequence_len].view(
             batch_size, sequence_len
@@ -238,19 +236,57 @@ class TokenWindowLoader:
             batch_size, sequence_len
         )
 
+        self.queue = queue.Queue(maxsize=3)
+        self.worker = threading.Thread(target=self._worker_loop, daemon=True)
+        self.worker.start()
+
+    def _worker_loop(self):
+        """Background thread loop for prefetching and formatting token windows."""
+        # Double buffering to avoid race conditions with pin_memory
+        buffers = [
+            (
+                np.empty((self.batch_size, self.row_capacity), dtype=self.dtype),
+                torch.empty((self.batch_size, self.row_capacity), dtype=torch.long),
+                torch.empty(
+                    2 * self.batch_size * self.sequence_len,
+                    dtype=torch.long,
+                    pin_memory=True,
+                ),
+            )
+            for _ in range(3)
+        ]
+        idx = 0
+        while True:
+            hw, rb, cb = buffers[idx]
+            idx = (idx + 1) % len(buffers)
+
+            starts = torch.randint(
+                0, self.max_start + 1, (self.batch_size,), generator=self.generator
+            )
+            for row_idx, start in enumerate(starts.tolist()):
+                hw[row_idx] = self.tokens[start : start + self.row_capacity]
+
+            rb.copy_(torch.from_numpy(hw))
+            ci = cb[: self.batch_size * self.sequence_len].view(
+                self.batch_size, self.sequence_len
+            )
+            ct = cb[self.batch_size * self.sequence_len :].view(
+                self.batch_size, self.sequence_len
+            )
+            ci.copy_(rb[:, :-1])
+            ct.copy_(rb[:, 1:])
+
+            self.queue.put((ci, ct))
+
     def __iter__(self) -> TokenWindowLoader:
         return self
 
     def __next__(self):
-        starts = torch.randint(
-            0, self.max_start + 1, (self.batch_size,), generator=self.generator
-        )
-        for row_idx, start in enumerate(starts.tolist()):
-            self.host_windows[row_idx] = self.tokens[start : start + self.row_capacity]
-        self.row_buffer.copy_(self.host_windows_tensor)
-        self.cpu_inputs.copy_(self.row_buffer[:, :-1])
-        self.cpu_targets.copy_(self.row_buffer[:, 1:])
-        self.gpu_buffer.copy_(self.cpu_buffer, non_blocking=True)
+        """Yields the next batch of input and target tensors."""
+        ci, ct = self.queue.get()
+        self.inputs.copy_(ci, non_blocking=True)
+        self.targets.copy_(ct, non_blocking=True)
+
         self.tokens_sampled += self.batch_size * self.sequence_len
         epoch = 1 + (self.tokens_sampled // max(self.cache_info.num_tokens, 1))
         return self.inputs, self.targets, epoch

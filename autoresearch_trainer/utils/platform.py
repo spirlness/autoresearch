@@ -36,7 +36,9 @@ def find_vcvars64() -> str | None:
     if which_vswhere and which_vswhere not in vswhere_candidates:
         vswhere_candidates.append(which_vswhere)
 
-    default_vswhere = r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+    default_vswhere = (
+        r"C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+    )
     if os.path.isfile(default_vswhere) and default_vswhere not in vswhere_candidates:
         vswhere_candidates.append(default_vswhere)
 
@@ -65,7 +67,9 @@ def find_vcvars64() -> str | None:
         if not install_path:
             continue
 
-        vcvars64 = os.path.join(install_path, "VC", "Auxiliary", "Build", "vcvars64.bat")
+        vcvars64 = os.path.join(
+            install_path, "VC", "Auxiliary", "Build", "vcvars64.bat"
+        )
         if os.path.isfile(vcvars64):
             return vcvars64
 
@@ -124,7 +128,9 @@ def ensure_windows_msvc_compiler() -> str | None:
         detail = (exc.stderr or exc.stdout or "").strip()
         if detail:
             detail = f" Details: {detail}"
-        raise RuntimeError(f"Failed to load MSVC environment from '{vcvars64_path}'.{detail}") from exc
+        raise RuntimeError(
+            f"Failed to load MSVC environment from '{vcvars64_path}'.{detail}"
+        ) from exc
 
     compiler = shutil.which("cl.exe")
     if compiler is None:
@@ -163,10 +169,10 @@ def maybe_patch_msvc_utf8_help(compiler: str | None) -> str | None:
 def setup_platform_environment() -> PlatformInfo:
     """Unified entry point for platform-specific environment setup."""
     setup_terminal_encoding()
-    
+
     msvc_cl_path = None
     msvc_help_encoding = None
-    
+
     if os.name == "nt":
         # We perform these checks eagerly on Windows if inductor is used (or might be used)
         # to ensure cl.exe is in PATH before torch.compile triggers.
@@ -180,8 +186,7 @@ def setup_platform_environment() -> PlatformInfo:
                 "Install Visual Studio Build Tools with 'Desktop development with C++' to fix this.",
                 stacklevel=2,
             )
-            
+
     return PlatformInfo(
-        msvc_cl_path=msvc_cl_path,
-        msvc_help_encoding=msvc_help_encoding
+        msvc_cl_path=msvc_cl_path, msvc_help_encoding=msvc_help_encoding
     )

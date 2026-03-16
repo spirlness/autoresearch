@@ -482,6 +482,8 @@ def main() -> int:
     )
     set_random_seed(runtime.seed)
 
+    import dataclasses
+
     train_cache = ensure_train_token_cache(tokenizer)
     cache_status = "built" if train_cache.built else "using"
     print(
@@ -490,36 +492,71 @@ def main() -> int:
         flush=True,
     )
 
-    # Initialize Trainer
-    trainer = Trainer(runtime)
+    max_retries = 3
+    state = None
+    trainer = None
 
-    train_loader = make_token_window_loader(
-        train_cache,
-        runtime.model.device_batch_size,
-        runtime.model.max_seq_len,
-        device=trainer.device,
-        seed=runtime.seed + 1,
-    )
+    # Robust OOM Handling Loop
+    for attempt in range(max_retries + 1):
+        try:
+            trainer = Trainer(runtime)
+            train_loader = make_token_window_loader(
+                train_cache,
+                runtime.model.device_batch_size,
+                runtime.model.max_seq_len,
+                device=trainer.device,
+                seed=runtime.seed + 1,
+            )
+            state = trainer.train(tokenizer, train_loader)
+            break
+        except torch.cuda.OutOfMemoryError as e:
+            if attempt == max_retries or runtime.model.device_batch_size <= 1:
+                print(
+                    f"\n[System] OOM: Exhausted retries or reached min batch size. Hardware limit."
+                )
+                with open("metrics.jsonl", "a") as f:
+                    f.write(
+                        json.dumps({"failure_reason": "OOM", "message": str(e)}) + "\n"
+                    )
+                return 1
 
-    # Train
-    state = trainer.train(tokenizer, train_loader)
+            print(
+                f"\n[System] OOM caught. Halving device_batch_size. Retry {attempt + 1}/{max_retries}"
+            )
+            torch.cuda.empty_cache()
+
+            # Automatically adjust grad_accum_steps to maintain effective batch size
+            new_batch_size = max(1, runtime.model.device_batch_size // 2)
+            ratio = runtime.model.device_batch_size // new_batch_size
+            new_grad_accum = runtime.grad_accum_steps_override * ratio
+
+            new_model = dataclasses.replace(
+                runtime.model, device_batch_size=new_batch_size
+            )
+            runtime = dataclasses.replace(
+                runtime, model=new_model, grad_accum_steps_override=new_grad_accum
+            )
+
+    if state is None:
+        return 1
 
     # Final Eval & Stats
     val_bpb = None
+    val_bpb_std = None
     if not runtime.benchmark.enabled:
         trainer.raw_model.eval()
         trainer.model_for_eval.eval()
         with trainer.autocast_ctx:
-            val_bpb = evaluate_bpb(
+            val_bpb, val_bpb_std = evaluate_bpb(
                 trainer.model_for_eval, tokenizer, runtime.model.device_batch_size
             )
 
     # Report results
-    _report_final_stats(trainer, state, val_bpb)
+    _report_final_stats(trainer, state, val_bpb, val_bpb_std)
     return 0
 
 
-def _report_final_stats(trainer, state, val_bpb):
+def _report_final_stats(trainer, state, val_bpb, val_bpb_std=None):
     runtime = trainer.runtime
     t_end = time.time()
     total_batch_size = trainer.actual_total_batch_size
@@ -543,14 +580,16 @@ def _report_final_stats(trainer, state, val_bpb):
     )
     peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
 
-    print("---")
+    print("\n---")
     print(f"mode:             {'benchmark' if runtime.benchmark.enabled else 'train'}")
     print(f"profile:          {runtime.experiment_profile}")
-    print(
-        f"val_bpb:          {val_bpb:.6f}"
-        if val_bpb is not None
-        else "val_bpb:          skipped"
-    )
+    if val_bpb is not None:
+        if val_bpb_std is not None:
+            print(f"val_bpb:          {val_bpb:.6f} ± {val_bpb_std:.6f}")
+        else:
+            print(f"val_bpb:          {val_bpb:.6f}")
+    else:
+        print("val_bpb:          skipped")
     print(f"total_seconds:    {t_end - state.t_start:.1f}")
     print(
         f"warmup_excluded_tok_per_sec: {warmup_excluded_tok_per_sec:,.0f}"
@@ -575,3 +614,26 @@ def _report_final_stats(trainer, state, val_bpb):
     print(f"total_tokens_M:   {state.step * total_batch_size / 1e6:.1f}")
     print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
     print("---")
+
+    # Record the experiment in the ledger for agent introspection
+    ledger_entry = {
+        "timestamp": time.time(),
+        "profile": runtime.experiment_profile,
+        "val_bpb": val_bpb,
+        "val_bpb_std": val_bpb_std,
+        "total_seconds": t_end - state.t_start,
+        "warmup_excluded_tok_per_sec": warmup_excluded_tok_per_sec,
+        "warmup_excluded_mfu": warmup_excluded_mfu,
+        "end_to_end_tok_per_sec": end_to_end_tok_per_sec,
+        "end_to_end_mfu": end_to_end_mfu,
+        "peak_vram_mb": peak_vram_mb,
+        "config": {
+            "depth": runtime.model.depth,
+            "max_seq_len": runtime.model.max_seq_len,
+            "device_batch_size": runtime.model.device_batch_size,
+            "grad_accum_steps": runtime.grad_accum_steps_override,
+            "aspect_ratio": runtime.model.aspect_ratio,
+        },
+    }
+    with open("experiment_ledger.jsonl", "a") as f:
+        f.write(json.dumps(ledger_entry) + "\n")

@@ -55,7 +55,9 @@ def read_updates() -> list[tuple[str, str, str, str]]:
     return updates
 
 
-def collect_candidate_blobs(remote_name: str, updates: list[tuple[str, str, str, str]]) -> dict[str, set[str]]:
+def collect_candidate_blobs(
+    remote_name: str, updates: list[tuple[str, str, str, str]]
+) -> dict[str, set[str]]:
     blob_paths: dict[str, set[str]] = defaultdict(set)
     seen_revisions: set[str] = set()
 
@@ -98,7 +100,9 @@ def inspect_blobs(blob_paths: dict[str, set[str]]) -> list[str]:
                     f"oversized blob: {path} ({format_bytes(size_bytes)} > {format_bytes(MAX_BLOB_BYTES)})"
                 )
                 continue
-            if any(fnmatch.fnmatch(path_lower, pattern) for pattern in DISALLOWED_PATTERNS):
+            if any(
+                fnmatch.fnmatch(path_lower, pattern) for pattern in DISALLOWED_PATTERNS
+            ):
                 violations.append(f"tracked artifact type: {path}")
     return violations
 
@@ -122,8 +126,14 @@ def main() -> int:
         print(f"- {violation}", file=sys.stderr)
     print("", file=sys.stderr)
     print("Keep local wheels and model artifacts out of Git history.", file=sys.stderr)
-    print("Use vendor/ as an untracked cache, or publish large binaries via releases/object storage.", file=sys.stderr)
-    print("If a bad file is already committed, remove it and rewrite history before pushing.", file=sys.stderr)
+    print(
+        "Use vendor/ as an untracked cache, or publish large binaries via releases/object storage.",
+        file=sys.stderr,
+    )
+    print(
+        "If a bad file is already committed, remove it and rewrite history before pushing.",
+        file=sys.stderr,
+    )
     return 1
 
 

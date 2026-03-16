@@ -14,6 +14,7 @@ except ImportError as exc:
 else:
     FLASH_ATTN_IMPORT_ERROR = None
 
+
 def verify_installation() -> bool:
     """Run an import and smoke test for the pinned Flash Attention wheel."""
     print("=" * 70)
@@ -23,7 +24,9 @@ def verify_installation() -> bool:
     if FLASH_ATTN_IMPORT_ERROR is not None:
         print("\n[FAILED] Flash Attention is not installed in this environment.")
         print(f"  - Import error: {FLASH_ATTN_IMPORT_ERROR}")
-        print("  - Note: the bundled Windows wheel is currently pinned to CPython 3.12 AMD64.")
+        print(
+            "  - Note: the bundled Windows wheel is currently pinned to CPython 3.12 AMD64."
+        )
         return False
 
     # Version info
@@ -37,7 +40,9 @@ def verify_installation() -> bool:
     if torch.cuda.is_available():
         print(f"\nGPU Information:")
         print(f"  - Device: {torch.cuda.get_device_name(0)}")
-        print(f"  - Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB")
+        print(
+            f"  - Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB"
+        )
 
     # Functional test
     print(f"\nFunctional Test:")
@@ -46,12 +51,15 @@ def verify_installation() -> bool:
         batch_size, seq_len, num_heads, head_dim = 2, 128, 8, 64
         dtype = torch.float16
 
-        q = torch.randn(batch_size, seq_len, num_heads, head_dim,
-                       device='cuda', dtype=dtype)
-        k = torch.randn(batch_size, seq_len, num_heads, head_dim,
-                       device='cuda', dtype=dtype)
-        v = torch.randn(batch_size, seq_len, num_heads, head_dim,
-                       device='cuda', dtype=dtype)
+        q = torch.randn(
+            batch_size, seq_len, num_heads, head_dim, device="cuda", dtype=dtype
+        )
+        k = torch.randn(
+            batch_size, seq_len, num_heads, head_dim, device="cuda", dtype=dtype
+        )
+        v = torch.randn(
+            batch_size, seq_len, num_heads, head_dim, device="cuda", dtype=dtype
+        )
 
         # Match the causal attention path used by train.py.
         output = flash_attn_func(q, k, v, causal=True)
@@ -70,7 +78,7 @@ def verify_installation() -> bool:
         torch.cuda.synchronize()
         elapsed = time.time() - start
 
-        print(f"  [OK] Performance:  {100/elapsed:.2f} iterations/sec")
+        print(f"  [OK] Performance:  {100 / elapsed:.2f} iterations/sec")
         print(f"\n[SUCCESS] All tests passed! Flash Attention 2.8.3 is ready!")
 
     except Exception as exc:
