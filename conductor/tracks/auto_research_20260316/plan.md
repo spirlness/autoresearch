@@ -5,10 +5,10 @@
 - [x] Task: Implement `autoresearch_trainer/analyzer.py` 864b072
 - [x] Task: Conductor - User Manual Verification 'Results Analyzer & Metrics Parsing' (Protocol in workflow.md) fead9f4
 
-## Phase 2: Experiment Orchestrator
-- [ ] Task: Write Tests for `orchestrator.py` (launching processes, timeout handling)
-- [ ] Task: Implement `autoresearch_trainer/orchestrator.py`
-- [ ] Task: Conductor - User Manual Verification 'Experiment Orchestrator' (Protocol in workflow.md)
+## Phase 2: Experiment Orchestrator [checkpoint: 335d901]
+- [x] Task: Write Tests for `orchestrator.py` (launching processes, timeout handling) 22812a7
+- [x] Task: Implement `autoresearch_trainer/orchestrator.py` 22812a7
+- [x] Task: Conductor - User Manual Verification 'Experiment Orchestrator' (Protocol in workflow.md) 335d901
 
 ## Phase 3: Code/Config Mutator
 - [ ] Task: Write Tests for `mutator.py` (modifying `config.py` and code files)
