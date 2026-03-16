@@ -29,7 +29,7 @@ def verify_installation() -> bool:
         return False
 
     # Version info
-    print(f"\nVersion Information:")
+    print("\nVersion Information:")
     print(f"  - PyTorch:         {torch.__version__}")
     print(f"  - Flash Attention: {flash_attn.__version__}")
     print(f"  - CUDA Available:  {torch.cuda.is_available()}")
@@ -37,14 +37,14 @@ def verify_installation() -> bool:
 
     # GPU info
     if torch.cuda.is_available():
-        print(f"\nGPU Information:")
+        print("\nGPU Information:")
         print(f"  - Device: {torch.cuda.get_device_name(0)}")
         print(
             f"  - Memory: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.2f} GB"
         )
 
     # Functional test
-    print(f"\nFunctional Test:")
+    print("\nFunctional Test:")
     try:
         # Create test tensors
         batch_size, seq_len, num_heads, head_dim = 2, 128, 8, 64
@@ -78,7 +78,7 @@ def verify_installation() -> bool:
         elapsed = time.time() - start
 
         print(f"  [OK] Performance:  {100 / max(elapsed, 1e-6):.2f} iterations/sec")
-        print(f"\n[SUCCESS] All tests passed! Flash Attention 2.8.3 is ready!")
+        print("\n[SUCCESS] All tests passed! Flash Attention 2.8.3 is ready!")
 
     except Exception as exc:
         print(f"  [FAILED] Test failed: {exc}")

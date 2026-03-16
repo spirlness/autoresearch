@@ -1,5 +1,4 @@
 from unittest.mock import mock_open, patch
-
 from autoresearch_trainer.mutator import mutate_config
 
 

@@ -1,6 +1,4 @@
 import os
-import sys
-import time
 from autoresearch_trainer.runner import run_research_loop
 
 # Set a very small time budget for each experiment to speed up demonstration

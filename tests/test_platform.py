@@ -1,7 +1,5 @@
 import pytest
-import os
-import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from autoresearch_trainer.utils.platform import (
     load_windows_msvc_env,

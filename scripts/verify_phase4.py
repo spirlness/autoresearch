@@ -1,5 +1,3 @@
-import os
-import sys
 from autoresearch_trainer.runner import run_research_loop
 
 # We will run 2 iterations with 1 benchmark step each

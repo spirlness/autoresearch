@@ -1,4 +1,3 @@
-import pytest
 import subprocess
 from unittest.mock import MagicMock, patch
 from autoresearch_trainer.orchestrator import run_experiment

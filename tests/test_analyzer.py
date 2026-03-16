@@ -1,8 +1,6 @@
 import json
 from unittest.mock import mock_open, patch
-
-from autoresearch_trainer.analyzer import get_summary, parse_ledger, parse_metrics
-
+from autoresearch_trainer.analyzer import parse_metrics, parse_ledger, get_summary
 
 def test_parse_metrics():
     data = [

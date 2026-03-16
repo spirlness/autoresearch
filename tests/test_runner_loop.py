@@ -25,13 +25,18 @@ def test_run_research_loop_3_iterations():
         assert len(results) == 3
         assert mock_run.call_count == 3
         assert mock_summary.call_count == 3
+        
+        # Check that environment overrides are being passed along correctly
+        # First call has no env vars set by the loop
+        assert results[0]["applied_env_vars"] == {}
+        # Subsequent calls have the modified env vars
+        assert "EMBEDDING_LR" in results[1]["applied_env_vars"]
+        assert results[1]["applied_env_vars"]["EMBEDDING_LR"] == "0.4"
+
         first_call = mock_run.call_args_list[0]
-        second_call = mock_run.call_args_list[1]
         assert first_call.kwargs["timeout"] is None
         assert first_call.kwargs["profile"] == "throughput"
         assert first_call.kwargs["extra_args"] == ["--seed", "123"]
-        assert first_call.kwargs["env_vars"] == {}
-        assert second_call.kwargs["env_vars"] == {"EMBEDDING_LR": "0.4"}
 
 def test_build_research_loop_extra_args():
     args = SimpleNamespace(
