@@ -1,9 +1,9 @@
 # Implementation Plan: End-to-End Autonomous Research Loop
 
-## Phase 1: Results Analyzer & Metrics Parsing
-- [ ] Task: Write Tests for `analyzer.py` (parse `metrics.jsonl`, extract `val_bpb`)
-- [ ] Task: Implement `autoresearch_trainer/analyzer.py`
-- [ ] Task: Conductor - User Manual Verification 'Results Analyzer & Metrics Parsing' (Protocol in workflow.md)
+## Phase 1: Results Analyzer & Metrics Parsing [checkpoint: fead9f4]
+- [x] Task: Write Tests for `analyzer.py` (parse `metrics.jsonl`, extract `val_bpb`) 864b072
+- [x] Task: Implement `autoresearch_trainer/analyzer.py` 864b072
+- [x] Task: Conductor - User Manual Verification 'Results Analyzer & Metrics Parsing' (Protocol in workflow.md) fead9f4
 
 ## Phase 2: Experiment Orchestrator
 - [ ] Task: Write Tests for `orchestrator.py` (launching processes, timeout handling)
