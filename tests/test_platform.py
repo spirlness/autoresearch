@@ -1,7 +1,5 @@
 import pytest
-import os
-import subprocess
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 from autoresearch_trainer.utils.platform import maybe_patch_msvc_utf8_help
 from torch._inductor import cpp_builder

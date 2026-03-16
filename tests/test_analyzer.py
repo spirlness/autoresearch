@@ -1,6 +1,4 @@
-import os
 import json
-import pytest
 from autoresearch_trainer.analyzer import parse_metrics, parse_ledger, get_summary
 
 def test_parse_metrics(tmp_path):

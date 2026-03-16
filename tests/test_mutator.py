@@ -1,5 +1,3 @@
-import os
-import pytest
 from autoresearch_trainer.mutator import mutate_config
 
 def test_mutate_config(tmp_path):

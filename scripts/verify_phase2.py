@@ -1,5 +1,3 @@
-import os
-import sys
 from autoresearch_trainer.orchestrator import run_experiment
 
 # We will run a very short benchmark to verify orchestration
