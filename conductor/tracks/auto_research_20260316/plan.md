@@ -20,6 +20,6 @@
 - [x] Task: Implement integrated research loop in `autoresearch_trainer/runner.py` 5161e9b
 - [x] Task: Conductor - User Manual Verification 'End-to-End Loop Integration' (Protocol in workflow.md) 631c06a
 
-## Phase 5: Verification & Success Demonstration
-- [ ] Task: Conduct a 3-experiment run and verify results
-- [ ] Task: Conductor - User Manual Verification 'Verification & Success Demonstration' (Protocol in workflow.md)
+## Phase 5: Verification & Success Demonstration [checkpoint: 3d9c614]
+- [x] Task: Conduct a 3-experiment run and verify results 3d9c614
+- [x] Task: Conductor - User Manual Verification 'Verification & Success Demonstration' (Protocol in workflow.md) 3d9c614
