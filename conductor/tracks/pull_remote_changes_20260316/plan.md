@@ -2,6 +2,6 @@
 
 ## Phase 1: Repository Synchronization
 - [x] Task: Fetch all remote updates.
-- [ ] Task: Merge or rebase remote changes into the current branch.
+- [x] Task: Merge or rebase remote changes into the current branch.
 - [ ] Task: Confirm synchronization success and resolve any conflicts.
 - [ ] Task: Conductor - User Manual Verification 'Phase 1: Repository Synchronization' (Protocol in workflow.md)
