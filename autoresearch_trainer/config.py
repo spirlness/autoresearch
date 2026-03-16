@@ -206,11 +206,21 @@ def parse_args(available_inductor_modes: list[str]) -> argparse.Namespace:
         default=0,
         help="Run N iterations of the autonomous research loop.",
     )
+    parser.add_argument(
+        "--research-timeout",
+        type=int,
+        default=0,
+        help="Optional wall-clock timeout in seconds for each research subprocess. 0 disables the outer timeout.",
+    )
     args = parser.parse_args()
     if args.benchmark_steps < 0:
         parser.error("--benchmark-steps must be >= 0")
     if args.grad_accum_steps <= 0:
         parser.error("--grad-accum-steps must be >= 1")
+    if args.research_iterations < 0:
+        parser.error("--research-iterations must be >= 0")
+    if args.research_timeout < 0:
+        parser.error("--research-timeout must be >= 0")
     return args
 
 

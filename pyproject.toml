@@ -13,7 +13,7 @@ dependencies = [
     "requests>=2.32.0",
     "rustbpe>=0.1.0",
     "tiktoken>=0.11.0",
-    "flash-attn @ https://huggingface.co/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl#sha256=d1e76adda81f57d9a300b9e8d71b9c467e07923e0d8e5baa5d90e2007815ec93 ; sys_platform == 'win32' and python_version == '3.12' and platform_machine == 'AMD64'",
+    "flash-attn @ https://hf-mirror.com/ussoewwin/Flash-Attention-2_for_Windows/resolve/main/flash_attn-2.8.3%2Bcu130torch2.10.0cxx11abiTRUE-cp312-cp312-win_amd64.whl#sha256=d1e76adda81f57d9a300b9e8d71b9c467e07923e0d8e5baa5d90e2007815ec93 ; sys_platform == 'win32' and python_version == '3.12' and platform_machine == 'AMD64'",
     "torch==2.10.0",
     "triton-windows==3.6.0.post26; sys_platform == 'win32'",
 ]

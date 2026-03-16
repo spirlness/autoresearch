@@ -236,29 +236,27 @@ class TokenWindowLoader:
             batch_size, sequence_len
         )
 
-        self.queue = queue.Queue(maxsize=3)
+        self.ready_queue = queue.Queue(maxsize=3)
+        self.free_queue = queue.Queue(maxsize=3)
+        for _ in range(3):
+            self.free_queue.put(
+                (
+                    np.empty((self.batch_size, self.row_capacity), dtype=self.dtype),
+                    torch.empty((self.batch_size, self.row_capacity), dtype=torch.long),
+                    torch.empty(
+                        2 * self.batch_size * self.sequence_len,
+                        dtype=torch.long,
+                        pin_memory=True,
+                    ),
+                )
+            )
         self.worker = threading.Thread(target=self._worker_loop, daemon=True)
         self.worker.start()
 
     def _worker_loop(self):
         """Background thread loop for prefetching and formatting token windows."""
-        # Double buffering to avoid race conditions with pin_memory
-        buffers = [
-            (
-                np.empty((self.batch_size, self.row_capacity), dtype=self.dtype),
-                torch.empty((self.batch_size, self.row_capacity), dtype=torch.long),
-                torch.empty(
-                    2 * self.batch_size * self.sequence_len,
-                    dtype=torch.long,
-                    pin_memory=True,
-                ),
-            )
-            for _ in range(3)
-        ]
-        idx = 0
         while True:
-            hw, rb, cb = buffers[idx]
-            idx = (idx + 1) % len(buffers)
+            hw, rb, cb = self.free_queue.get()
 
             starts = torch.randint(
                 0, self.max_start + 1, (self.batch_size,), generator=self.generator
@@ -276,16 +274,25 @@ class TokenWindowLoader:
             ci.copy_(rb[:, :-1])
             ct.copy_(rb[:, 1:])
 
-            self.queue.put((ci, ct))
+            self.ready_queue.put((hw, rb, cb))
 
     def __iter__(self) -> TokenWindowLoader:
         return self
 
     def __next__(self):
         """Yields the next batch of input and target tensors."""
-        ci, ct = self.queue.get()
-        self.inputs.copy_(ci, non_blocking=True)
-        self.targets.copy_(ct, non_blocking=True)
+        hw, rb, cb = self.ready_queue.get()
+        ci = cb[: self.batch_size * self.sequence_len].view(
+            self.batch_size, self.sequence_len
+        )
+        ct = cb[self.batch_size * self.sequence_len :].view(
+            self.batch_size, self.sequence_len
+        )
+        # Keep these copies synchronous so the worker does not recycle pinned
+        # host memory before the DMA finishes on the default stream.
+        self.inputs.copy_(ci)
+        self.targets.copy_(ct)
+        self.free_queue.put((hw, rb, cb))
 
         self.tokens_sampled += self.batch_size * self.sequence_len
         epoch = 1 + (self.tokens_sampled // max(self.cache_info.num_tokens, 1))

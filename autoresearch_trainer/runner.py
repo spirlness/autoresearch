@@ -3,15 +3,12 @@ from __future__ import annotations
 import gc
 import json
 import math
-import os
 import random
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
-
-from prepare import Tokenizer, evaluate_bpb
 
 from .compile import (
     AVAILABLE_INDUCTOR_MODES,
@@ -31,7 +28,9 @@ from .model import (
     norm,
     resolve_attention_backend,
 )
-from .token_cache import ensure_train_token_cache, make_token_window_loader
+
+if TYPE_CHECKING:
+    from prepare import Tokenizer
 
 
 H100_BF16_PEAK_FLOPS = 989.5e12
@@ -408,7 +407,7 @@ class Trainer:
         state.step += 1
         state.tokens_processed = state.step * actual_total_batch_size
 
-    def train(self, tokenizer: Tokenizer, train_loader: Any):
+    def train(self, tokenizer: "Tokenizer", train_loader: Any):
         runtime = self.runtime
         state = self.state
         self.raw_model.train()
@@ -473,28 +472,73 @@ def _compile_status(runtime):
 from .analyzer import get_summary
 from .orchestrator import run_experiment
 
-def run_research_loop(iterations: int = 3, timeout: int = 300, extra_args: list[str] = None) -> list[dict[str, Any]]:
+
+def build_research_loop_extra_args(args: Any) -> list[str]:
+    return [
+        "--benchmark-steps",
+        str(args.benchmark_steps),
+        "--compile-backend",
+        args.compile_backend,
+        "--compile-mode",
+        args.compile_mode,
+        "--compile-scope",
+        args.compile_scope,
+        "--optimizer-compile-backend",
+        args.optimizer_compile_backend,
+        "--grad-accum-steps",
+        str(args.grad_accum_steps),
+        "--seed",
+        str(args.seed),
+    ]
+
+
+def compute_oom_recovery_settings(
+    device_batch_size: int, grad_accum_steps: int
+) -> tuple[int, int, int, int]:
+    new_batch_size = max(1, device_batch_size // 2)
+    target_effective_batch = device_batch_size * max(grad_accum_steps, 1)
+    new_grad_accum = max(1, math.ceil(target_effective_batch / new_batch_size))
+    recovered_effective_batch = new_batch_size * new_grad_accum
+    return (
+        new_batch_size,
+        new_grad_accum,
+        target_effective_batch,
+        recovered_effective_batch,
+    )
+
+
+def run_research_loop(
+    iterations: int = 3,
+    timeout: int | None = None,
+    profile: str = "baseline",
+    extra_args: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Execute the end-to-end research loop."""
     results = []
-    
+
     # We maintain a dict of env vars that gets updated across iterations
     current_env_vars = {}
-    
+
     for i in range(iterations):
         print(f"\n--- Research Iteration {i+1}/{iterations} ---")
         if current_env_vars:
             print(f"Current overrides: {current_env_vars}")
-            
+
         # 1. Run Experiment
-        experiment_res = run_experiment(timeout=timeout, profile="baseline", extra_args=extra_args, env_vars=current_env_vars)
-        
+        experiment_res = run_experiment(
+            timeout=timeout,
+            profile=profile,
+            extra_args=extra_args,
+            env_vars=current_env_vars.copy(),
+        )
+
         # 2. Analyze Results
         summary = {}
         if experiment_res.get("status") == "success":
             summary = get_summary("metrics.jsonl", "experiment_ledger.jsonl")
         else:
             print(f"Iteration {i+1} experiment did not succeed: {experiment_res.get('status')}")
-        
+
         # Record iteration result
         iteration_result = {
             "iteration": i + 1,
@@ -503,9 +547,9 @@ def run_research_loop(iterations: int = 3, timeout: int = 300, extra_args: list[
             "applied_env_vars": current_env_vars.copy()
         }
         results.append(iteration_result)
-        
+
         print(f"Iteration {i+1} summary: {summary}")
-        
+
         # 3. Mutate (if not last iteration)
         if i < iterations - 1:
             # TODO: Implement a more advanced mutation strategy (e.g., Bayesian Optimization)
@@ -513,16 +557,20 @@ def run_research_loop(iterations: int = 3, timeout: int = 300, extra_args: list[
             next_lr = round(0.4 + (i * 0.05), 4)
             current_env_vars["EMBEDDING_LR"] = str(next_lr)
             print(f"Prepared env overrides for next iteration: {current_env_vars}")
-            
+
     return results
 
 def main() -> int:
     args = parse_args(AVAILABLE_INDUCTOR_MODES)
-    
+
     # Check for research loop trigger
-    # Note: parse_args doesn't have research_iterations yet, I'll add it there.
     if hasattr(args, "research_iterations") and args.research_iterations > 0:
-        run_research_loop(iterations=args.research_iterations)
+        run_research_loop(
+            iterations=args.research_iterations,
+            timeout=args.research_timeout or None,
+            profile=args.experiment_profile,
+            extra_args=build_research_loop_extra_args(args),
+        )
         return 0
     model_compile_backend = resolve_compile_backend(args.compile_backend)
     validate_compile_backend(model_compile_backend)
@@ -532,6 +580,9 @@ def main() -> int:
     )
 
     # Prepare Data and Tokenizer
+    from prepare import Tokenizer, evaluate_bpb
+    from .token_cache import ensure_train_token_cache, make_token_window_loader
+
     tokenizer = Tokenizer.from_directory()
 
     runtime = build_runtime_config(
@@ -585,14 +636,38 @@ def main() -> int:
             )
             torch.cuda.empty_cache()
 
-            # Automatically adjust grad_accum_steps to maintain effective batch size
-            new_batch_size = max(1, runtime.model.device_batch_size // 2)
-            ratio = runtime.model.device_batch_size // new_batch_size
-            new_grad_accum = runtime.grad_accum_steps_override * ratio
+            # Keep the recovered effective batch size as close as possible to the
+            # original target. Exact preservation is impossible for odd sizes.
+            (
+                new_batch_size,
+                new_grad_accum,
+                target_effective_batch,
+                recovered_effective_batch,
+            ) = compute_oom_recovery_settings(
+                runtime.model.device_batch_size,
+                runtime.grad_accum_steps_override,
+            )
 
-            print(f"[System] Adjusted config: device_batch_size={new_batch_size}, grad_accum_steps={new_grad_accum}")
+            print(
+                "[System] Adjusted config: "
+                f"device_batch_size={new_batch_size}, "
+                f"grad_accum_steps={new_grad_accum}, "
+                f"effective_batch={recovered_effective_batch} "
+                f"(target={target_effective_batch})"
+            )
             with open("experiment_ledger.jsonl", "a") as f:
-                f.write(json.dumps({"event": "OOM_RECOVERY", "new_device_batch_size": new_batch_size, "new_grad_accum_steps": new_grad_accum}) + "\n")
+                f.write(
+                    json.dumps(
+                        {
+                            "event": "OOM_RECOVERY",
+                            "new_device_batch_size": new_batch_size,
+                            "new_grad_accum_steps": new_grad_accum,
+                            "target_effective_batch": target_effective_batch,
+                            "recovered_effective_batch": recovered_effective_batch,
+                        }
+                    )
+                    + "\n"
+                )
 
             new_model = dataclasses.replace(
                 runtime.model, device_batch_size=new_batch_size

@@ -88,11 +88,9 @@ def find_vcvars64() -> str | None:
 
 def load_windows_msvc_env(vcvars64_path: str) -> None:
     """Run vcvars64.bat and capture environment variables into the current process."""
-    # Using ; instead of && to be more robust across different shell-invoking scenarios on Windows
-    command = f'call "{vcvars64_path}" >nul ; set'
+    command = f'call "{vcvars64_path}" >nul && set'
     result = subprocess.run(
-        command,
-        shell=True,
+        ["cmd.exe", "/d", "/s", "/c", command],
         check=True,
         capture_output=True,
         text=True,
