@@ -8,6 +8,10 @@
 - **Flash Attention**: Integrated for highly efficient memory usage and faster training.
 - **torch.compile**: Utilized for optimizing PyTorch models for maximum training throughput.
 
+## Testing & Quality Assurance
+- **pytest**: Primary testing framework for unit and integration tests.
+- **pytest-mock**: Plugin for mocking dependencies in tests.
+
 ## Package & Project Management
 - **uv**: Modern, extremely fast Python package and project manager for dependency resolution and environment management.
 

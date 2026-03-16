@@ -17,6 +17,7 @@ To create an autonomous research platform where AI agents can iterate on LLM tra
 3. **Architectural Innovation**: Enable agents to propose, implement, and validate novel model architectures and training techniques.
 
 ## Key Features
+- **Modular Design**: Split into a thin entrypoint and a compact trainer package for better extensibility and readability.
 - **Experiment Tracking**: Comprehensive logging and history of experiments to ensure the agent can learn from past successes and failures.
 - **Fixed-Time Budgeting**: Strict adherence to a 5-minute training window to ensure fair comparisons between different architectural or hyperparameter choices.
 - **Structured Metrics**: Automatic generation of `metrics.jsonl` to facilitate analysis by external swarms or plotting utilities.
