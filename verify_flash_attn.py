@@ -77,7 +77,7 @@ def verify_installation() -> bool:
         torch.cuda.synchronize()
         elapsed = time.time() - start
 
-        print(f"  [OK] Performance:  {100 / elapsed:.2f} iterations/sec")
+        print(f"  [OK] Performance:  {100 / max(elapsed, 1e-6):.2f} iterations/sec")
         print(f"\n[SUCCESS] All tests passed! Flash Attention 2.8.3 is ready!")
 
     except Exception as exc:
