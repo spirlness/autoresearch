@@ -1,6 +1,5 @@
 """Verify the local Flash Attention installation on the active CUDA device."""
 
-import sys
 
 import torch
 
