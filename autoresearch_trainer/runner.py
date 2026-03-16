@@ -3,6 +3,7 @@ from __future__ import annotations
 import gc
 import json
 import math
+import os
 import random
 import time
 from dataclasses import dataclass
@@ -469,8 +470,56 @@ def _compile_status(runtime):
     return f"torch.compile: enabled ({runtime.compile.model_backend}, scope={runtime.compile.scope})"
 
 
+from .analyzer import get_summary
+from .mutator import mutate_config
+from .orchestrator import run_experiment
+
+def run_research_loop(iterations: int = 3, timeout: int = 300) -> list[dict[str, Any]]:
+    """Execute the end-to-end research loop."""
+    results = []
+    config_path = os.path.join(os.path.dirname(__file__), "config.py")
+    
+    for i in range(iterations):
+        print(f"\n--- Research Iteration {i+1}/{iterations} ---")
+        
+        # 1. Run Experiment
+        # We run with extra_args to ensure we don't accidentally recurse
+        # though orchestrator by default runs just 'train.py'
+        experiment_res = run_experiment(timeout=timeout, profile="baseline")
+        
+        # 2. Analyze Results
+        summary = get_summary("metrics.jsonl", "experiment_ledger.jsonl")
+        
+        # Record iteration result
+        iteration_result = {
+            "iteration": i + 1,
+            "experiment": experiment_res,
+            "summary": summary
+        }
+        results.append(iteration_result)
+        
+        print(f"Iteration {i+1} summary: {summary}")
+        
+        # 3. Mutate (if not last iteration)
+        if i < iterations - 1:
+            # Simple heuristic: adjust learning rate if loss is high?
+            # For now, let's just do a dummy mutation to prove the logic
+            # In a real system, this would be an AI agent's logic
+            curr_lr = summary.get("loss", 0) # Dummy use
+            mutations = {"EMBEDDING_LR": 0.6 * (0.9 ** (i + 1))}
+            mutate_config(config_path, mutations)
+            print(f"Mutated config for next iteration: {mutations}")
+            
+    return results
+
 def main() -> int:
     args = parse_args(AVAILABLE_INDUCTOR_MODES)
+    
+    # Check for research loop trigger
+    # Note: parse_args doesn't have research_iterations yet, I'll add it there.
+    if hasattr(args, "research_iterations") and args.research_iterations > 0:
+        run_research_loop(iterations=args.research_iterations)
+        return 0
     model_compile_backend = resolve_compile_backend(args.compile_backend)
     validate_compile_backend(model_compile_backend)
     validate_compile_mode(model_compile_backend, args.compile_mode)

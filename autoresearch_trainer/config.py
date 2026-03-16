@@ -121,10 +121,10 @@ MATRIX_LR = 0.04
 SCALAR_LR = 0.5
 WEIGHT_DECAY = 0.2
 ADAM_BETAS = (0.8, 0.95)
-WARMUP_RATIO = 0.0
+WARMUP_RATIO = 0.05
 WARMDOWN_RATIO = 0.5
 FINAL_LR_FRAC = 0.0
-MUON_WARMUP_STEPS = 300
+MUON_WARMUP_STEPS = 100
 TARGET_MFU_PERCENT = 50.0
 VE_GATE_CHANNELS = 32
 SOFTCAP = 15.0
@@ -199,6 +199,12 @@ def parse_args(available_inductor_modes: list[str]) -> argparse.Namespace:
         type=int,
         default=SEED_DEFAULT,
         help="Random seed for model initialization and any stochastic runtime behavior.",
+    )
+    parser.add_argument(
+        "--research-iterations",
+        type=int,
+        default=0,
+        help="Run N iterations of the autonomous research loop.",
     )
     args = parser.parse_args()
     if args.benchmark_steps < 0:
