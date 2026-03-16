@@ -4,7 +4,6 @@ import shutil
 import subprocess
 import warnings
 from dataclasses import dataclass
-import torch.distributed as dist
 from torch._inductor import cpp_builder
 
 

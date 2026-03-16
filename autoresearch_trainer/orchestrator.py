@@ -50,11 +50,11 @@ def run_experiment(timeout: int = 300, profile: str = "baseline", extra_args: Li
                 "stderr_path": "experiment_stderr.log"
             }
             
-    except subprocess.TimeoutExpired as exc:
+    except subprocess.TimeoutExpired:
         elapsed = time.time() - start_time
         # In a more advanced setup, we might need to hunt down child processes
         # or use taskkill on Windows to ensure GPU memory is released.
-        print(f"[Warning] Experiment timed out. Attempting to ensure resources are freed.")
+        print("[Warning] Experiment timed out. Attempting to ensure resources are freed.")
         return {
             "status": "timeout",
             "elapsed": elapsed,

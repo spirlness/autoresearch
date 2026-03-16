@@ -1,7 +1,6 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-import torch
 import verify_flash_attn
 
 @pytest.fixture
