@@ -35,7 +35,7 @@ from .model import (
 )
 
 if TYPE_CHECKING:
-    from prepare import Tokenizer
+    from entrypoints.prepare import Tokenizer
 
 
 H100_BF16_PEAK_FLOPS = 989.5e12
@@ -702,7 +702,7 @@ def main() -> int:
     )
 
     # Prepare Data and Tokenizer
-    from prepare import Tokenizer, evaluate_bpb
+    from entrypoints.prepare import Tokenizer, evaluate_bpb
     from .token_cache import ensure_train_token_cache, make_token_window_loader
 
     tokenizer = Tokenizer.from_directory()

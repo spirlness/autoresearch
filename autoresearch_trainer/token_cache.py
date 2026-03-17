@@ -11,7 +11,7 @@ import numpy as np
 import pyarrow.parquet as pq
 import torch
 
-from prepare import (
+from entrypoints.prepare import (
     CACHE_DIR,
     TOKENIZER_DIR,
     VAL_FILENAME,
