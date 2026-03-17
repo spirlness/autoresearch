@@ -1,11 +1,14 @@
+import os
+
 import pytest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from autoresearch_trainer.utils.platform import (
     load_windows_msvc_env,
     maybe_patch_msvc_utf8_help,
 )
 from torch._inductor import cpp_builder
+
 
 def test_load_windows_msvc_env_uses_cmd_and_sets_environment():
     with patch("os.name", "nt"), patch.dict(os.environ, {}, clear=True), patch(

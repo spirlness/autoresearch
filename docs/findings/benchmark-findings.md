@@ -2,11 +2,16 @@
 
 这份文件只保留后续最值得复用的结论，适合在重新开始性能优化前快速回顾。
 
+说明：
+
+- 下文出现的 `generated/...` 与 `archive/...` 路径，都指向 [`../history/benchmarks/`](../history/benchmarks/README.md) 下的历史记录。
+- 未来新的本地 benchmark scratch 输出应进入 `results/`，而不是继续堆到历史目录里。
+
 ## 1. 当前默认基线 (Updated 2026-03-16)
 
 - 当前默认 `baseline/default` 基线是在原 `mfu50` 路线上加了 MLP-only checkpoint 后，把模型加深到 `9L/768d` 的版本。
 - **2026-03-16 优化**: 引入了 `WARMUP_RATIO = 0.05` 和 `MUON_WARMUP_STEPS = 100`。
-- 代表记录：`generated/2026-03-16/opt_val_bpb_20260316.txt` (推算)
+- 代表记录：2026-03-16 research loop 汇总结果，未单独保留 committed raw benchmark 文本。
 - 配置：
   - `n_embd=768`
   - `depth=9`
@@ -60,6 +65,6 @@
 
 ## 5. 详细记录入口
 
-- 详细表格版总结见 `SUMMARY_2026-03-15.md`
-- 历史归档日志见 `archive/`
-- 本地生成日志见 `generated/`
+- 详细表格版总结见 [`benchmark-summary-2026-03-15.md`](./benchmark-summary-2026-03-15.md)
+- 历史归档日志见 [`../history/benchmarks/archive/`](../history/benchmarks/archive/)
+- 保留的生成型历史日志见 [`../history/benchmarks/generated/`](../history/benchmarks/generated/)

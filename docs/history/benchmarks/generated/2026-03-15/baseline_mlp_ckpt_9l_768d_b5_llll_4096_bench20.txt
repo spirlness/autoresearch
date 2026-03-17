@@ -1,0 +1,60 @@
+Vocab size: 8,192
+Attention backend: flash_attn
+Experiment profile: baseline
+Device batch size: 5
+Mode: benchmark
+Compile backend: inductor
+Compile mode: default
+Compile scope: model
+Optimizer compile backend: inductor
+MSVC cl.exe: C:\Program Files\Microsoft Visual Studio\18\Insiders\VC\Tools\MSVC\14.50.35717\bin\HostX64\x64\cl.exe
+MSVC help decode override: utf-8
+Benchmark steps: 20
+Benchmark warmup steps: 2
+Log interval: 10
+Device peak BF16/FP16 TFLOPS est: 43.78
+Model config: {'sequence_len': 4096, 'vocab_size': 8192, 'n_layer': 9, 'n_head': 6, 'n_kv_head': 6, 'n_embd': 768, 'window_pattern': 'LLLL'}
+C:\Users\Administrator\Desktop\autoresearch\.venv\Lib\site-packages\torch\_refs\__init__.py:5209: UserWarning: expandable_segments not supported on this platform (Triggered internally at C:\actions-runner\_work\pytorch\pytorch\pytorch\c10/cuda/CUDAAllocatorConfig.h:39.)
+  return torch.empty_permuted(
+Parameter counts:
+  wte                     : 6,291,456
+  value_embeds            : 31,457,280
+  lm_head                 : 6,291,456
+  transformer_matrices    : 63,701,952
+  scalars                 : 18
+  total                   : 107,742,162
+Estimated FLOPs per token: 7.596991e+08
+Scaling AdamW LRs by 1/sqrt(768/768) = 1.000000
+torch.compile: enabled (inductor, mode=default, scope=model)
+Time budget: 300s
+Total batch size: 20480
+Gradient accumulation steps: 1
+step 00000 (5.0%) | loss: 9.010111 | lrm: 1.00 | dt: 10749ms | tok/sec: warmup | mfu: warmup | h100_mfu: warmup | epoch: 1 | remaining: 19 steps
+step 00001 (10.0%) | loss: 8.903509 | lrm: 1.00 | dt: 708ms | tok/sec: warmup | mfu: warmup | h100_mfu: warmup | epoch: 1 | remaining: 18 steps
+step 00009 (50.0%) | loss: 7.222717 | lrm: 1.00 | dt: 718ms | tok/sec: 28,539 | mfu: 49.5% | h100_mfu: 2.2% | epoch: 1 | remaining: 10 steps
+step 00019 (100.0%) | loss: 6.452198 | lrm: 1.00 | dt: 718ms | tok/sec: 28,508 | mfu: 49.5% | h100_mfu: 2.2% | epoch: 1 | remaining: 0 steps
+---
+mode:             benchmark
+profile:          baseline
+compile_backend:  inductor
+compile_mode:     default
+compile_scope:    model
+optimizer_compile:inductor
+val_bpb:          skipped
+training_seconds: 12.9
+total_seconds:    25.7
+startup_seconds:  1.1
+peak_vram_mb:     4538.4
+tok_per_sec:      28,500
+target_tok_per_sec_50_mfu: 28,811
+train_tflops:     21.65
+mfu_percent:      49.46
+mfu50_gap_percent:0.54
+h100_mfu_percent: 2.19
+peak_tflops_est:  43.78
+total_tokens_M:   0.4
+num_steps:        20
+measured_steps:   18
+benchmark_note:   excluded first 2 warmup steps from steady-state metrics
+num_params_M:     107.7
+depth:            9

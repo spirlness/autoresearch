@@ -1,20 +1,20 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-import verify_flash_attn
+from entrypoints import verify_flash_attn
 
 @pytest.fixture
 def mock_success_env():
     """Mock a successful environment with flash_attn and torch.cuda available."""
-    with patch("verify_flash_attn.FLASH_ATTN_IMPORT_ERROR", None), \
-         patch("verify_flash_attn.flash_attn") as mock_flash_attn, \
-         patch("verify_flash_attn.flash_attn_func") as mock_flash_attn_func, \
-         patch("verify_flash_attn.torch.cuda.is_available", return_value=True), \
-         patch("verify_flash_attn.torch.version.cuda", "12.1"), \
-         patch("verify_flash_attn.torch.cuda.get_device_name", return_value="Mock GPU"), \
-         patch("verify_flash_attn.torch.cuda.get_device_properties") as mock_props, \
-         patch("verify_flash_attn.torch.cuda.synchronize"), \
-         patch("verify_flash_attn.torch.randn") as mock_randn:
+    with patch("entrypoints.verify_flash_attn.FLASH_ATTN_IMPORT_ERROR", None), \
+         patch("entrypoints.verify_flash_attn.flash_attn") as mock_flash_attn, \
+         patch("entrypoints.verify_flash_attn.flash_attn_func") as mock_flash_attn_func, \
+         patch("entrypoints.verify_flash_attn.torch.cuda.is_available", return_value=True), \
+         patch("entrypoints.verify_flash_attn.torch.version.cuda", "12.1"), \
+         patch("entrypoints.verify_flash_attn.torch.cuda.get_device_name", return_value="Mock GPU"), \
+         patch("entrypoints.verify_flash_attn.torch.cuda.get_device_properties") as mock_props, \
+         patch("entrypoints.verify_flash_attn.torch.cuda.synchronize"), \
+         patch("entrypoints.verify_flash_attn.torch.randn") as mock_randn:
 
         mock_flash_attn.__version__ = "2.8.3"
 
@@ -38,7 +38,10 @@ def mock_success_env():
 
 def test_verify_installation_import_error():
     """Test verification fails when flash_attn cannot be imported."""
-    with patch("verify_flash_attn.FLASH_ATTN_IMPORT_ERROR", ImportError("No module named flash_attn")):
+    with patch(
+        "entrypoints.verify_flash_attn.FLASH_ATTN_IMPORT_ERROR",
+        ImportError("No module named flash_attn"),
+    ):
         assert verify_flash_attn.verify_installation() is False
 
 def test_verify_installation_success(mock_success_env):
@@ -57,12 +60,15 @@ def test_main_success(mock_success_env):
 
 def test_main_failure():
     """Test main returns 1 on failure."""
-    with patch("verify_flash_attn.verify_installation", return_value=False):
+    with patch("entrypoints.verify_flash_attn.verify_installation", return_value=False):
         assert verify_flash_attn.main() == 1
 
 def test_verify_installation_no_cuda(mock_success_env):
     """Test verification handles environment where CUDA isn't strictly 'available'."""
-    with patch("verify_flash_attn.torch.cuda.is_available", return_value=False):
+    with patch("entrypoints.verify_flash_attn.torch.cuda.is_available", return_value=False):
         # Even if torch.randn is called with device="cuda", we mock it to raise RuntimeError
-        with patch("verify_flash_attn.torch.randn", side_effect=RuntimeError("Expected a 'cuda' device type")):
+        with patch(
+            "entrypoints.verify_flash_attn.torch.randn",
+            side_effect=RuntimeError("Expected a 'cuda' device type"),
+        ):
             assert verify_flash_attn.verify_installation() is False

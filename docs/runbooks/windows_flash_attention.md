@@ -16,7 +16,7 @@ The wheel is fetched directly by `uv` from its pinned download URL and verified 
 
 ```bash
 uv sync
-uv run python verify_flash_attn.py
+uv run python -m entrypoints.verify_flash_attn
 ```
 
 If you want an extra local backup copy, you can keep the wheel under `vendor/`, but it is no longer required for `uv sync` and should remain untracked.
@@ -30,15 +30,15 @@ Expected outcome:
 ## Training entrypoints
 
 ```bash
-uv run train.py
+uv run python -m entrypoints.train
 uv run python -m autoresearch_trainer
-uv run train.py --benchmark-steps 20
-uv run train.py --experiment-profile throughput --benchmark-steps 20
-uv run train.py --experiment-profile mfu50 --benchmark-steps 20
+uv run python -m entrypoints.train --benchmark-steps 20
+uv run python -m entrypoints.train --experiment-profile throughput --benchmark-steps 20
+uv run python -m entrypoints.train --experiment-profile mfu50 --benchmark-steps 20
 ```
 
 ## Notes
 
-- `train.py` is a thin entrypoint; the real training runtime lives in `autoresearch_trainer/`.
+- `entrypoints/train.py` is the canonical thin entrypoint; the root `train.py` shim remains for backwards compatibility.
 - The current default baseline is the deeper near-50%-MFU profile with MLP-only checkpointing; the old throughput-oriented profile is preserved as `throughput`.
-- The detailed benchmark table is in `benchmarks/SUMMARY_2026-03-15.md`.
+- The detailed benchmark table is in `../findings/benchmark-summary-2026-03-15.md`.

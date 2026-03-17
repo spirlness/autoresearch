@@ -1,5 +1,7 @@
 # Benchmark 详细总结（2026-03-15）
 
+说明：下文出现的 `generated/...` 与 `archive/...` 路径，均相对于 [`../history/benchmarks/`](../history/benchmarks/README.md)。
+
 ## 1. 结论速览
 
 | 目标 | 当前最佳配置 | 代表记录 | tok/s | train TFLOPS | MFU | Peak VRAM |
