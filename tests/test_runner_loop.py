@@ -1,5 +1,4 @@
 import json
-import pytest
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -13,50 +12,144 @@ from autoresearch_trainer.runner import (
 )
 
 
-def test_run_research_loop_3_iterations():
+def test_run_research_loop_skips_long_run_for_benchmark_rejected_candidate():
     with patch("autoresearch_trainer.runner.run_experiment") as mock_run, \
          patch("autoresearch_trainer.runner.get_summary") as mock_summary, \
          patch("autoresearch_trainer.runner.persist_research_artifacts") as mock_persist:
 
         mock_run.return_value = {"status": "success", "elapsed": 300}
         mock_summary.side_effect = [
-            {"val_bpb": 1.2, "loss": 9.0},
-            {"val_bpb": 1.1, "loss": 8.5},
-            {"val_bpb": 1.3, "loss": 8.8},
+            {
+                "warmup_tok_per_sec": 1000,
+                "warmup_mfu": 50.0,
+                "peak_vram_mb": 5000,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "warmup_tok_per_sec": 995,
+                "warmup_mfu": 49.8,
+                "peak_vram_mb": 5050,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "val_bpb": 1.2,
+                "val_bpb_std": 0.002,
+                "loss": 9.0,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "warmup_tok_per_sec": 800,
+                "warmup_mfu": 42.0,
+                "peak_vram_mb": 6500,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "warmup_tok_per_sec": 810,
+                "warmup_mfu": 42.5,
+                "peak_vram_mb": 6400,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
         ]
         mock_persist.return_value = {"history_path": "results/research_loop/history.json"}
 
         results = run_research_loop(
-            iterations=3,
+            iterations=2,
             timeout=None,
             profile="throughput",
             extra_args=["--seed", "123"],
         )
 
-        assert len(results) == 3
-        assert mock_run.call_count == 3
-        assert mock_summary.call_count == 3
-        assert mock_persist.call_count == 3
-        
-        # Check that environment overrides are being passed along correctly
-        # First call has no env vars set by the loop
+        assert len(results) == 2
+        assert mock_run.call_count == 5
+        assert mock_summary.call_count == 5
+        assert mock_persist.call_count == 2
         assert results[0]["applied_env_vars"] == {}
-        # Subsequent calls explore warmup-aware candidates around the best run so far
         assert "EMBEDDING_LR" in results[1]["applied_env_vars"]
         assert results[1]["applied_env_vars"]["EMBEDDING_LR"] == "0.4"
         assert results[1]["applied_env_vars"]["WARMUP_RATIO"] == "0.05"
         assert results[1]["applied_env_vars"]["MUON_WARMUP_STEPS"] == "100"
-        assert results[2]["applied_env_vars"]["EMBEDDING_LR"] == "0.36"
         assert results[0]["progress"]["current_is_best"] is True
-        assert results[1]["progress"]["current_is_best"] is True
-        assert results[2]["progress"]["best_iteration"] == 2
-        assert results[2]["recommended_next_env_vars"]["EMBEDDING_LR"] == "0.44"
-        assert results[2]["artifact_paths"]["history_path"] == "results/research_loop/history.json"
+        assert results[1]["progress"]["best_iteration"] == 1
+        assert results[1]["frontier_status"] == "benchmark_rejected"
+        assert results[1]["train"] is None
+        assert results[1]["benchmark"]["promoted"] is False
+        assert results[1]["artifact_paths"]["history_path"] == "results/research_loop/history.json"
 
         first_call = mock_run.call_args_list[0]
         assert first_call.kwargs["timeout"] is None
         assert first_call.kwargs["profile"] == "throughput"
-        assert first_call.kwargs["extra_args"] == ["--seed", "123"]
+        assert first_call.kwargs["extra_args"] == ["--seed", "1123", "--benchmark-steps", "20"]
+
+        third_call = mock_run.call_args_list[2]
+        assert third_call.kwargs["extra_args"] == ["--seed", "1223", "--benchmark-steps", "0"]
+
+
+def test_run_research_loop_confirms_borderline_challenger():
+    with patch("autoresearch_trainer.runner.run_experiment") as mock_run, \
+         patch("autoresearch_trainer.runner.get_summary") as mock_summary, \
+         patch("autoresearch_trainer.runner.persist_research_artifacts") as mock_persist:
+
+        mock_run.return_value = {"status": "success", "elapsed": 300}
+        mock_summary.side_effect = [
+            {
+                "warmup_tok_per_sec": 1000,
+                "warmup_mfu": 50.0,
+                "peak_vram_mb": 5000,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "warmup_tok_per_sec": 995,
+                "warmup_mfu": 49.8,
+                "peak_vram_mb": 5050,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "val_bpb": 1.2,
+                "val_bpb_std": 0.003,
+                "loss": 9.0,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "warmup_tok_per_sec": 980,
+                "warmup_mfu": 49.0,
+                "peak_vram_mb": 5050,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "warmup_tok_per_sec": 985,
+                "warmup_mfu": 49.5,
+                "peak_vram_mb": 5100,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "val_bpb": 1.198,
+                "val_bpb_std": 0.003,
+                "loss": 8.9,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+            {
+                "val_bpb": 1.206,
+                "val_bpb_std": 0.004,
+                "loss": 9.0,
+                "config": {"device_batch_size": 5, "max_seq_len": 4096, "window_pattern": "LLLL"},
+            },
+        ]
+        mock_persist.return_value = {"history_path": "results/research_loop/history.json"}
+
+        results = run_research_loop(
+            iterations=2,
+            timeout=None,
+            profile="baseline",
+            extra_args=["--seed", "123"],
+        )
+
+        assert len(results) == 2
+        assert mock_run.call_count == 7
+        assert results[1]["train"] is not None
+        assert results[1]["train"]["confirmation_required"] is True
+        assert results[1]["train"]["confirmation"] is not None
+        assert results[1]["frontier_status"] == "candidate_not_confirmed"
+        assert results[1]["progress"]["best_iteration"] == 1
 
 
 def test_build_research_loop_extra_args():

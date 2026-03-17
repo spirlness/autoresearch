@@ -44,6 +44,10 @@ LOG_DIR = RESULTS_DIR / "logs"
 METRICS_PATH = RESULTS_DIR / "metrics.jsonl"
 EXPERIMENT_LEDGER_PATH = RESULTS_DIR / "experiment_ledger.jsonl"
 RESEARCH_LOOP_STATE_DIR = RESULTS_DIR / "research_loop"
+RESEARCH_BENCHMARK_STEPS_DEFAULT = 20
+RESEARCH_BENCHMARK_ATTEMPTS = 2
+RESEARCH_CONFIRMATION_ATTEMPTS = 1
+RESEARCH_SEED_STRIDE = 1000
 
 
 def ensure_results_layout() -> None:
@@ -485,7 +489,16 @@ def _compile_status(runtime):
     return f"torch.compile: enabled ({runtime.compile.model_backend}, scope={runtime.compile.scope})"
 
 
-from .analyzer import build_research_progress_report, find_best_result, get_summary
+from .analyzer import (
+    aggregate_summaries,
+    build_research_progress_report,
+    find_best_result,
+    get_summary,
+    is_stable_improvement,
+    score_summary,
+    should_confirm_challenger,
+    should_promote_benchmark_candidate,
+)
 from .mutator import suggest_research_env_vars
 from .orchestrator import run_experiment
 
@@ -507,6 +520,98 @@ def build_research_loop_extra_args(args: Any) -> list[str]:
         "--seed",
         str(args.seed),
     ]
+
+
+def _get_cli_arg_value(extra_args: list[str] | None, flag: str, default: int) -> int:
+    if not extra_args:
+        return default
+    try:
+        index = extra_args.index(flag)
+    except ValueError:
+        return default
+    if index + 1 >= len(extra_args):
+        return default
+    try:
+        return int(extra_args[index + 1])
+    except ValueError:
+        return default
+
+
+def _set_cli_arg(extra_args: list[str] | None, flag: str, value: int) -> list[str]:
+    updated_args = list(extra_args or [])
+    try:
+        index = updated_args.index(flag)
+    except ValueError:
+        updated_args.extend([flag, str(value)])
+        return updated_args
+
+    if index + 1 >= len(updated_args):
+        updated_args.append(str(value))
+    else:
+        updated_args[index + 1] = str(value)
+    return updated_args
+
+
+def _with_seed_offset(extra_args: list[str] | None, offset: int) -> list[str]:
+    base_seed = _get_cli_arg_value(extra_args, "--seed", 1337)
+    return _set_cli_arg(extra_args, "--seed", base_seed + offset)
+
+
+def _run_research_stage(
+    *,
+    iteration: int,
+    stage_name: str,
+    attempts: int,
+    timeout: int | None,
+    profile: str,
+    extra_args: list[str] | None,
+    env_vars: dict[str, str],
+    seed_offset: int,
+) -> dict[str, Any]:
+    stage_attempts: list[dict[str, Any]] = []
+    successful_summaries: list[dict[str, Any]] = []
+
+    for attempt_idx in range(attempts):
+        attempt_number = attempt_idx + 1
+        attempt_args = _with_seed_offset(extra_args, seed_offset + attempt_idx)
+        experiment_res = run_experiment(
+            timeout=timeout,
+            profile=profile,
+            extra_args=attempt_args,
+            env_vars=env_vars.copy(),
+            label=f"research_iter_{iteration}_{stage_name}_{attempt_number}",
+        )
+        attempt_record = {
+            "attempt": attempt_number,
+            "args": attempt_args,
+            "experiment": experiment_res,
+            "summary": {},
+        }
+        if experiment_res.get("status") == "success":
+            attempt_record["summary"] = get_summary(
+                str(METRICS_PATH), str(EXPERIMENT_LEDGER_PATH)
+            )
+            successful_summaries.append(attempt_record["summary"])
+        else:
+            stage_attempts.append(attempt_record)
+            break
+        stage_attempts.append(attempt_record)
+
+    stage_status = "success" if len(successful_summaries) == attempts else (
+        "partial_success" if successful_summaries else (
+            stage_attempts[-1]["experiment"].get("status", "failed")
+            if stage_attempts
+            else "failed"
+        )
+    )
+    return {
+        "status": stage_status,
+        "attempts": stage_attempts,
+        "summary": aggregate_summaries(successful_summaries),
+        "elapsed": sum(
+            attempt.get("experiment", {}).get("elapsed", 0.0) for attempt in stage_attempts
+        ),
+    }
 
 
 def compute_oom_recovery_settings(
@@ -630,26 +735,139 @@ def run_research_loop(
 
     # We maintain a dict of env vars that gets updated across iterations
     current_env_vars = {}
+    base_extra_args = list(extra_args or [])
+    benchmark_steps = _get_cli_arg_value(
+        base_extra_args, "--benchmark-steps", RESEARCH_BENCHMARK_STEPS_DEFAULT
+    )
+    if benchmark_steps <= 0:
+        benchmark_steps = RESEARCH_BENCHMARK_STEPS_DEFAULT
+    benchmark_args = _set_cli_arg(base_extra_args, "--benchmark-steps", benchmark_steps)
+    train_args = _set_cli_arg(base_extra_args, "--benchmark-steps", 0)
 
     for i in range(iterations):
         print(f"\n--- Research Iteration {i+1}/{iterations} ---")
         if current_env_vars:
             print(f"Current overrides: {current_env_vars}")
 
-        # 1. Run Experiment
-        experiment_res = run_experiment(
-            timeout=timeout,
-            profile=profile,
-            extra_args=extra_args,
-            env_vars=current_env_vars.copy(),
+        incumbent_result = find_best_result(results)
+        incumbent_summary = (
+            dict(incumbent_result.get("summary", {})) if incumbent_result is not None else None
+        )
+        incumbent_benchmark_summary = (
+            dict(incumbent_result.get("benchmark_summary", {}))
+            if incumbent_result is not None
+            else None
         )
 
-        # 2. Analyze Results
-        summary = {}
-        if experiment_res.get("status") == "success":
-            summary = get_summary(str(METRICS_PATH), str(EXPERIMENT_LEDGER_PATH))
+        benchmark_stage = _run_research_stage(
+            iteration=i + 1,
+            stage_name="benchmark",
+            attempts=RESEARCH_BENCHMARK_ATTEMPTS,
+            timeout=timeout,
+            profile=profile,
+            extra_args=benchmark_args,
+            env_vars=current_env_vars.copy(),
+            seed_offset=(i + 1) * RESEARCH_SEED_STRIDE,
+        )
+        benchmark_summary = dict(benchmark_stage.get("summary", {}))
+        if benchmark_stage.get("status") == "success":
+            promoted, promotion_reason = should_promote_benchmark_candidate(
+                benchmark_summary, incumbent_benchmark_summary
+            )
         else:
-            print(f"Iteration {i+1} experiment did not succeed: {experiment_res.get('status')}")
+            promoted = False
+            promotion_reason = (
+                "benchmark stage did not complete cleanly "
+                f"({benchmark_stage.get('status')})"
+            )
+        benchmark_stage["promoted"] = promoted
+        benchmark_stage["promotion_reason"] = promotion_reason
+
+        train_stage: dict[str, Any] | None = None
+        summary = benchmark_summary
+        frontier_status = "benchmark_rejected"
+        decision_reason = promotion_reason
+
+        if promoted:
+            train_stage = _run_research_stage(
+                iteration=i + 1,
+                stage_name="train",
+                attempts=1,
+                timeout=timeout,
+                profile=profile,
+                extra_args=train_args,
+                env_vars=current_env_vars.copy(),
+                seed_offset=(i + 1) * RESEARCH_SEED_STRIDE + 100,
+            )
+            train_stage["confirmation_required"] = False
+            train_stage["confirmation"] = None
+            summary = dict(train_stage.get("summary", {}))
+            if train_stage.get("status") != "success":
+                frontier_status = "train_failed"
+                decision_reason = f"full train stage ended with {train_stage.get('status')}"
+            elif incumbent_summary is None:
+                frontier_status = "success"
+                decision_reason = "first promoted train run established the incumbent"
+            elif score_summary(summary) < score_summary(incumbent_summary):
+                confirmation_required = should_confirm_challenger(
+                    summary, incumbent_summary
+                )
+                train_stage["confirmation_required"] = confirmation_required
+                if confirmation_required:
+                    confirmation_stage = _run_research_stage(
+                        iteration=i + 1,
+                        stage_name="confirm",
+                        attempts=RESEARCH_CONFIRMATION_ATTEMPTS,
+                        timeout=timeout,
+                        profile=profile,
+                        extra_args=train_args,
+                        env_vars=current_env_vars.copy(),
+                        seed_offset=(i + 1) * RESEARCH_SEED_STRIDE + 200,
+                    )
+                    train_stage["confirmation"] = confirmation_stage
+                    if confirmation_stage.get("status") == "success":
+                        summary = aggregate_summaries(
+                            [
+                                train_stage["summary"],
+                                *[
+                                    attempt.get("summary", {})
+                                    for attempt in confirmation_stage.get("attempts", [])
+                                    if attempt.get("experiment", {}).get("status") == "success"
+                                ],
+                            ]
+                        )
+                        train_stage["summary"] = summary
+                        if is_stable_improvement(summary, incumbent_summary):
+                            frontier_status = "success"
+                            decision_reason = (
+                                "challenger stayed ahead after confirmation rerun"
+                            )
+                        else:
+                            frontier_status = "candidate_not_confirmed"
+                            decision_reason = (
+                                "challenger lost its edge after confirmation rerun"
+                            )
+                    else:
+                        frontier_status = "confirmation_failed"
+                        decision_reason = (
+                            "challenger needed confirmation but the rerun did not succeed"
+                        )
+                else:
+                    frontier_status = "success"
+                    decision_reason = (
+                        "challenger beat the incumbent by a margin larger than expected noise"
+                    )
+            else:
+                frontier_status = "candidate_not_better"
+                decision_reason = "full train run did not beat the incumbent"
+
+        experiment_res = {
+            "status": frontier_status,
+            "phase": "train" if promoted else "benchmark",
+            "reason": decision_reason,
+            "elapsed": benchmark_stage.get("elapsed", 0.0)
+            + (train_stage.get("elapsed", 0.0) if train_stage is not None else 0.0),
+        }
 
         # Record iteration result
         iteration_result = {
@@ -657,10 +875,15 @@ def run_research_loop(
             "experiment": experiment_res,
             "summary": summary,
             "applied_env_vars": current_env_vars.copy(),
+            "frontier_status": frontier_status,
+            "benchmark": benchmark_stage,
+            "benchmark_summary": benchmark_summary,
+            "train": train_stage,
         }
         results.append(iteration_result)
 
         print(f"Iteration {i+1} summary: {summary}")
+        print(f"Iteration {i+1} decision: {frontier_status} ({decision_reason})")
         progress = build_research_progress_report(results)
         iteration_result["progress"] = progress
         if progress.get("current_is_best"):
@@ -895,6 +1118,10 @@ def _report_final_stats(trainer, state, val_bpb, val_bpb_std=None):
             "device_batch_size": runtime.model.device_batch_size,
             "grad_accum_steps": runtime.grad_accum_steps_override,
             "aspect_ratio": runtime.model.aspect_ratio,
+            "window_pattern": runtime.model.window_pattern,
+            "activation_checkpoint": runtime.model.activation_checkpoint,
+            "ve_gate_channels": runtime.model.ve_gate_channels,
+            "softcap": runtime.model.softcap,
         },
     }
     ensure_results_layout()

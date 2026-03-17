@@ -1,12 +1,16 @@
 import json
 from unittest.mock import mock_open, patch
 from autoresearch_trainer.analyzer import (
+    aggregate_summaries,
     build_research_progress_report,
     find_best_result,
     get_summary,
+    is_stable_improvement,
     parse_ledger,
     parse_metrics,
     score_summary,
+    should_confirm_challenger,
+    should_promote_benchmark_candidate,
 )
 
 
@@ -74,6 +78,46 @@ def test_score_summary_prefers_lower_val_bpb_then_higher_throughput():
     assert score_summary(better) < score_summary(worse)
 
 
+def test_aggregate_summaries_uses_median_for_noise_reduction():
+    aggregate = aggregate_summaries(
+        [
+            {"val_bpb": 1.20, "warmup_tok_per_sec": 1000, "config": {"depth": 9}},
+            {"val_bpb": 1.18, "warmup_tok_per_sec": 1100, "config": {"depth": 9}},
+            {"val_bpb": 1.40, "warmup_tok_per_sec": 900, "config": {"depth": 9}},
+        ]
+    )
+
+    assert aggregate["attempt_count"] == 3
+    assert aggregate["val_bpb"] == 1.2
+    assert aggregate["warmup_tok_per_sec"] == 1000
+    assert aggregate["config"] == {"depth": 9}
+
+
+def test_should_promote_benchmark_candidate_requires_reasonable_efficiency():
+    promoted, _ = should_promote_benchmark_candidate(
+        {"warmup_tok_per_sec": 970, "warmup_mfu": 48.8, "peak_vram_mb": 5200},
+        {"warmup_tok_per_sec": 1000, "warmup_mfu": 50.0, "peak_vram_mb": 5000},
+    )
+    rejected, _ = should_promote_benchmark_candidate(
+        {"warmup_tok_per_sec": 800, "warmup_mfu": 42.0, "peak_vram_mb": 6500},
+        {"warmup_tok_per_sec": 1000, "warmup_mfu": 50.0, "peak_vram_mb": 5000},
+    )
+
+    assert promoted is True
+    assert rejected is False
+
+
+def test_should_confirm_challenger_when_improvement_is_within_noise():
+    incumbent = {"val_bpb": 1.200, "val_bpb_std": 0.003, "tok_per_sec": 1000}
+    narrow_win = {"val_bpb": 1.198, "val_bpb_std": 0.003, "tok_per_sec": 990}
+    clear_win = {"val_bpb": 1.190, "val_bpb_std": 0.001, "tok_per_sec": 980}
+
+    assert should_confirm_challenger(narrow_win, incumbent) is True
+    assert is_stable_improvement(narrow_win, incumbent) is False
+    assert should_confirm_challenger(clear_win, incumbent) is False
+    assert is_stable_improvement(clear_win, incumbent) is True
+
+
 def test_find_best_result_ignores_failed_runs():
     results = [
         {"iteration": 1, "experiment": {"status": "failed"}, "summary": {"val_bpb": 0.9}},
@@ -87,6 +131,28 @@ def test_find_best_result_ignores_failed_runs():
     assert best["iteration"] == 2
 
 
+def test_find_best_result_uses_frontier_status_when_present():
+    results = [
+        {
+            "iteration": 1,
+            "experiment": {"status": "success"},
+            "frontier_status": "success",
+            "summary": {"val_bpb": 1.2},
+        },
+        {
+            "iteration": 2,
+            "experiment": {"status": "success"},
+            "frontier_status": "candidate_not_confirmed",
+            "summary": {"val_bpb": 1.1},
+        },
+    ]
+
+    best = find_best_result(results)
+
+    assert best is not None
+    assert best["iteration"] == 1
+
+
 def test_build_research_progress_report_marks_new_best():
     results = [
         {
@@ -94,12 +160,14 @@ def test_build_research_progress_report_marks_new_best():
             "experiment": {"status": "success"},
             "summary": {"val_bpb": 1.3},
             "applied_env_vars": {},
+            "benchmark_summary": {"warmup_tok_per_sec": 1000},
         },
         {
             "iteration": 2,
             "experiment": {"status": "success"},
             "summary": {"val_bpb": 1.1},
             "applied_env_vars": {"EMBEDDING_LR": "0.4"},
+            "benchmark_summary": {"warmup_tok_per_sec": 1010},
         },
     ]
 
@@ -109,3 +177,4 @@ def test_build_research_progress_report_marks_new_best():
     assert report["best_iteration"] == 2
     assert report["current_is_best"] is True
     assert report["best_env_vars"] == {"EMBEDDING_LR": "0.4"}
+    assert report["best_benchmark_summary"] == {"warmup_tok_per_sec": 1010}

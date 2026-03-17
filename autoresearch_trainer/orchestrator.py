@@ -1,4 +1,5 @@
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -14,6 +15,7 @@ def run_experiment(
     profile: str = "baseline",
     extra_args: list[str] | None = None,
     env_vars: dict[str, str] | None = None,
+    label: str | None = None,
 ) -> dict[str, Any]:
     """Run the training entrypoint as a subprocess with logs under results/logs/."""
 
@@ -30,8 +32,13 @@ def run_experiment(
     start_time = time.time()
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
-        stdout_path = LOG_DIR / "experiment_stdout.log"
-        stderr_path = LOG_DIR / "experiment_stderr.log"
+        if label:
+            safe_label = re.sub(r"[^A-Za-z0-9_.-]+", "_", label).strip("_") or "experiment"
+            stdout_path = LOG_DIR / f"{safe_label}_stdout.log"
+            stderr_path = LOG_DIR / f"{safe_label}_stderr.log"
+        else:
+            stdout_path = LOG_DIR / "experiment_stdout.log"
+            stderr_path = LOG_DIR / "experiment_stderr.log"
         # We redirect stdout/stderr to files to avoid memory pressure from large logs
         with stdout_path.open("w", encoding="utf-8") as f_out, stderr_path.open(
             "w", encoding="utf-8"
