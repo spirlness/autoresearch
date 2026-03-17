@@ -1,5 +1,6 @@
 from unittest.mock import mock_open, patch
-from autoresearch_trainer.mutator import mutate_config
+
+from autoresearch_trainer.mutator import mutate_config, suggest_research_env_vars
 
 
 def _run_mutation(content: str, mutations: dict[str, object]) -> tuple[bool, str]:
@@ -48,3 +49,40 @@ def test_mutate_config_float_formatting():
 
     assert changed is True
     assert "LR = 0.0001" in new_content
+
+
+def test_suggest_research_env_vars_bootstraps_defaults():
+    next_env_vars = suggest_research_env_vars([])
+
+    assert next_env_vars == {
+        "WARMUP_RATIO": "0.05",
+        "MUON_WARMUP_STEPS": "100",
+        "EMBEDDING_LR": "0.4",
+    }
+
+
+def test_suggest_research_env_vars_moves_around_best_result():
+    results = [
+        {
+            "iteration": 1,
+            "experiment": {"status": "success"},
+            "summary": {"val_bpb": 1.2},
+            "applied_env_vars": {},
+        },
+        {
+            "iteration": 2,
+            "experiment": {"status": "success"},
+            "summary": {"val_bpb": 1.1},
+            "applied_env_vars": {
+                "WARMUP_RATIO": "0.05",
+                "MUON_WARMUP_STEPS": "100",
+                "EMBEDDING_LR": "0.4",
+            },
+        },
+    ]
+
+    next_env_vars = suggest_research_env_vars(results)
+
+    assert next_env_vars["EMBEDDING_LR"] == "0.36"
+    assert next_env_vars["WARMUP_RATIO"] == "0.05"
+    assert next_env_vars["MUON_WARMUP_STEPS"] == "100"

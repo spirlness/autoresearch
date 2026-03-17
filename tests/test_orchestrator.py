@@ -12,6 +12,8 @@ def test_run_experiment_success_without_timeout():
         assert result["returncode"] == 0
         mock_run.assert_called_once()
         args, kwargs = mock_run.call_args
+        assert args[0][:4] == ["uv", "run", "python", "-m"]
+        assert args[0][4] == "entrypoints.train"
         assert "timeout" not in kwargs
 
 def test_run_experiment_success_with_timeout():
@@ -23,11 +25,15 @@ def test_run_experiment_success_with_timeout():
         assert result["status"] == "success"
         assert result["returncode"] == 0
         args, kwargs = mock_run.call_args
+        assert args[0][4] == "entrypoints.train"
         assert kwargs["timeout"] == 900
 
 def test_run_experiment_timeout():
     with patch("subprocess.run") as mock_run:
-        mock_run.side_effect = subprocess.TimeoutExpired(cmd=["uv", "run", "train.py"], timeout=300)
+        mock_run.side_effect = subprocess.TimeoutExpired(
+            cmd=["uv", "run", "python", "-m", "entrypoints.train"],
+            timeout=300,
+        )
 
         result = run_experiment(timeout=300)
 

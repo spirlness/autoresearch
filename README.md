@@ -1,6 +1,6 @@
 # autoresearch
 
-![teaser](progress.png)
+![teaser](analysis/progress.png)
 
 *One day, frontier AI research used to be done by meat computers in between eating, sleeping, having other fun, and synchronizing once in a while using sound wave interconnect in the ritual of "group meeting". That era is long gone. Research is now entirely the domain of autonomous swarms of AI agents running across compute cluster megastructures in the skies. The agents claim that we are now in the 10,205th generation of the code base, in any case no one could tell if that's right or wrong as the "code" is now a self-modifying binary that has grown beyond human comprehension. This repo is the story of how it all began. -@karpathy, March 2026*.
 
@@ -8,13 +8,14 @@ The idea: give an AI agent a small but real LLM training setup and let it experi
 
 ## How it works
 
-The repo is still intentionally small, but the training runtime is now split into a thin entrypoint plus a compact package:
+The repo is still intentionally small, but the training runtime is now split into canonical entrypoints plus a compact package:
 
-- **`prepare.py`** — fixed constants, one-time data prep, tokenizer training, dataloader, and evaluation. This remains the evaluation harness.
-- **`train.py`** — tiny entrypoint that configures the environment and forwards into the trainer package.
+- **`entrypoints/prepare.py`** — fixed constants, one-time data prep, tokenizer training, dataloader, and evaluation. This remains the evaluation harness.
+- **`entrypoints/train.py`** — tiny entrypoint that configures the environment and forwards into the trainer package.
 - **`autoresearch_trainer/`** — model, optimizer, compile integration, runtime loop, mmap train-token cache, and validated experiment profiles.
+- **`analysis/`** — historical notebook material and generated figures.
 - **`program.md`** — baseline instructions for an autonomous coding agent.
-- **`benchmarks/`** — curated benchmark history plus the distilled findings from recent tuning work.
+- **`docs/`** — organized into runbooks, findings, and history so operational guidance and archives stay separate.
 
 By design, training runs for a **fixed 5-minute time budget** (wall clock, excluding startup/compilation), regardless of the details of your compute. The metric is **val_bpb** (validation bits per byte) — lower is better, and vocab-size-independent so architectural changes are fairly compared.
 
@@ -34,13 +35,14 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync
 
 # 3. Download data and train tokenizer (one-time, ~2 min)
-uv run prepare.py
+uv run python -m entrypoints.prepare
 
 # 4. Manually run a single training experiment (~5 min)
-uv run train.py
+uv run python -m entrypoints.train
 
-# Optional: use the package module entrypoint
-uv run python -m autoresearch_trainer
+# Compatibility shims remain available if you prefer the old commands
+uv run prepare.py
+uv run train.py
 ```
 
 If the above commands all work ok, your setup is working and you can go into autonomous research mode.
@@ -63,10 +65,10 @@ Two validated profiles are built in:
 Examples:
 
 ```bash
-uv run train.py --benchmark-steps 20
-uv run train.py --experiment-profile baseline --benchmark-steps 20
-uv run train.py --experiment-profile throughput --benchmark-steps 20
-uv run train.py --experiment-profile mfu50 --benchmark-steps 20
+uv run python -m entrypoints.train --benchmark-steps 20
+uv run python -m entrypoints.train --experiment-profile baseline --benchmark-steps 20
+uv run python -m entrypoints.train --experiment-profile throughput --benchmark-steps 20
+uv run python -m entrypoints.train --experiment-profile mfu50 --benchmark-steps 20
 ```
 
 ## Running the agent
@@ -82,14 +84,24 @@ The `program.md` file is essentially a super lightweight "skill".
 ## Project structure
 
 ```
-prepare.py                 — fixed data prep + evaluation harness
-train.py                   — thin entrypoint
+entrypoints/               — canonical runtime entrypoints
+    prepare.py             — fixed data prep + evaluation harness
+    train.py               — thin training entrypoint
+    verify_flash_attn.py   — local Flash Attention smoke test
 autoresearch_trainer/      — modular training runtime
     token_cache.py         — mmap train-token cache + random token-window loader
     utils/platform.py      — isolated OS and environment hacks
-benchmarks/                — benchmark archive + preserved findings
+analysis/                  — notebooks and generated figures
+    progress.ipynb         — historical plotting notebook
+    progress.png           — teaser figure
+docs/                      — documentation tree
+    runbooks/              — current operating docs
+    findings/              — durable research conclusions
+    history/               — archived benchmark and conductor material
 program.md                 — agent instructions
-verify_flash_attn.py       — local Flash Attention smoke test
+prepare.py                 — compatibility shim for entrypoints/prepare.py
+train.py                   — compatibility shim for entrypoints/train.py
+verify_flash_attn.py       — compatibility shim for entrypoints/verify_flash_attn.py
 pyproject.toml             — dependencies
 vendor/                    — optional untracked local wheel cache
 ```
@@ -100,13 +112,14 @@ vendor/                    — optional untracked local wheel cache
 - **Fixed time budget.** Training always runs for exactly 5 minutes, regardless of your specific platform. This means you can expect approx 12 experiments/hour and approx 100 experiments while you sleep. There are two upsides of this design decision. First, this makes experiments directly comparable regardless of what the agent changes (model size, batch size, architecture, etc). Second, this means that autoresearch will find the most optimal model for your platform in that time budget. The downside is that your runs (and results) become not comparable to other people running on other compute platforms.
 - **Validated profiles.** High-throughput and high-MFU settings are kept as named profiles instead of being scattered through ad-hoc notes.
 - **Self-contained.** No external dependencies beyond PyTorch and a few small packages. No distributed training, no complex configs. One GPU, one file, one metric.
-- **Agent-Ready Analytics.** The trainer automatically emits structured `metrics.jsonl` files per run, split into `warmup_excluded` and `end_to_end` groups so external swarms or plotting utilities can compare steady-state and full-run behavior without manual log scraping.
+- **Agent-Ready Analytics.** The trainer automatically emits structured `results/metrics.jsonl` and `results/experiment_ledger.jsonl` files per run, split into `warmup_excluded` and `end_to_end` groups so external swarms or plotting utilities can compare steady-state and full-run behavior without manual log scraping.
+- **Resume-friendly research artifacts.** Autonomous research runs now persist `history.json`, `best_run.json`, `next_run_env.json`, and a human-readable `NEXT_RUN.md` under `results/research_loop/`, so a fresh agent session can inspect the current frontier and continue from the last recommended overrides without reconstructing context from raw logs.
 
 ## Windows notes
 
-- Flash Attention and `torch.compile` support on Windows are documented in `docs/windows_flash_attention.md`.
+- Flash Attention and `torch.compile` support on Windows are documented in `docs/runbooks/windows_flash_attention.md`.
 - The pinned Windows Flash Attention wheel is downloaded by `uv sync` from its direct URL and validated with a SHA256 hash.
-- Recent benchmark analysis and preserved findings live in `benchmarks/SUMMARY_2026-03-15.md` and `benchmarks/KEY_FINDINGS.md`.
+- Recent benchmark analysis and preserved findings live in `docs/findings/benchmark-summary-2026-03-15.md` and `docs/findings/benchmark-findings.md`.
 
 ## Platform support
 
@@ -116,9 +129,9 @@ Seeing as there seems to be a lot of interest in tinkering with autoresearch on 
 
 1. To get half-decent results I'd use a dataset with a lot less entropy, e.g. this [TinyStories dataset](https://huggingface.co/datasets/karpathy/tinystories-gpt4-clean). These are GPT-4 generated short stories. Because the data is a lot narrower in scope, you will see reasonable results with a lot smaller models (if you try to sample from them after training).
 2. You might experiment with decreasing `vocab_size`, e.g. from 8192 down to 4096, 2048, 1024, or even - simply byte-level tokenizer with 256 possibly bytes after utf-8 encoding.
-3. In `prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
-4. Also in `prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
-5. In `train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
+3. In `entrypoints/prepare.py`, you'll want to lower `MAX_SEQ_LEN` a lot, depending on the computer even down to 256 etc. As you lower `MAX_SEQ_LEN`, you may want to experiment with increasing `DEVICE_BATCH_SIZE` in `entrypoints/train.py` slightly to compensate. The number of tokens per fwd/bwd pass is the product of these two.
+4. Also in `entrypoints/prepare.py`, you'll want to decrease `EVAL_TOKENS` so that your validation loss is evaluated on a lot less data.
+5. In `entrypoints/train.py`, the primary single knob that controls model complexity is the `DEPTH` (default 8, here). A lot of variables are just functions of this, so e.g. lower it down to e.g. 4.
 6. You'll want to most likely use `WINDOW_PATTERN` of just "L", because "SSSL" uses alternating banded attention pattern that may be very inefficient for you. Try it.
 7. The effective tokens per optimizer step are `DEVICE_BATCH_SIZE * MAX_SEQ_LEN * grad_accum_steps`. On smaller machines, lower `DEVICE_BATCH_SIZE` first and only raise `--grad-accum-steps` if you explicitly want more accumulation.
 

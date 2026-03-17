@@ -6,6 +6,7 @@ import math
 import random
 import time
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import torch
@@ -19,7 +20,11 @@ from .compile import (
     validate_compile_backend,
     validate_compile_mode,
 )
-from .config import build_runtime_config, parse_args, HEAD_DIM
+from .config import (
+    HEAD_DIM,
+    build_runtime_config,
+    parse_args,
+)
 from .model import (
     GPT,
     build_model_config,
@@ -30,10 +35,20 @@ from .model import (
 )
 
 if TYPE_CHECKING:
-    from prepare import Tokenizer
+    from entrypoints.prepare import Tokenizer
 
 
 H100_BF16_PEAK_FLOPS = 989.5e12
+RESULTS_DIR = Path("results")
+LOG_DIR = RESULTS_DIR / "logs"
+METRICS_PATH = RESULTS_DIR / "metrics.jsonl"
+EXPERIMENT_LEDGER_PATH = RESULTS_DIR / "experiment_ledger.jsonl"
+RESEARCH_LOOP_STATE_DIR = RESULTS_DIR / "research_loop"
+
+
+def ensure_results_layout() -> None:
+    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def set_random_seed(seed: int) -> None:
@@ -340,7 +355,8 @@ class Trainer:
             "warmup_excluded": warmup_excluded,
             "end_to_end": end_to_end,
         }
-        with open("metrics.jsonl", "a") as f:
+        ensure_results_layout()
+        with METRICS_PATH.open("a", encoding="utf-8") as f:
             f.write(json.dumps(metrics) + "\n")
 
     def _update_optimizer_params(self):
@@ -420,9 +436,9 @@ class Trainer:
         actual_total_batch_size = self.actual_total_batch_size
         grad_accum_steps = runtime.grad_accum_steps_override
 
-        # Reset log file
-        with open("metrics.jsonl", "w"):
-            pass
+        # Reset structured metrics for the current train run.
+        ensure_results_layout()
+        METRICS_PATH.write_text("", encoding="utf-8")
 
         print(f"Vocab size: {tokenizer.get_vocab_size():,}")
         print(f"Attention backend: {self.attention_name}")
@@ -469,7 +485,8 @@ def _compile_status(runtime):
     return f"torch.compile: enabled ({runtime.compile.model_backend}, scope={runtime.compile.scope})"
 
 
-from .analyzer import get_summary
+from .analyzer import build_research_progress_report, find_best_result, get_summary
+from .mutator import suggest_research_env_vars
 from .orchestrator import run_experiment
 
 
@@ -507,6 +524,101 @@ def compute_oom_recovery_settings(
     )
 
 
+def _format_env_lines(env_vars: dict[str, str]) -> list[str]:
+    if not env_vars:
+        return ["- none"]
+    return [f"- `{key}={value}`" for key, value in sorted(env_vars.items())]
+
+
+def render_next_research_run_markdown(
+    progress: dict[str, Any], next_env_vars: dict[str, str]
+) -> str:
+    lines = ["# Next Research Run", ""]
+    lines.append(f"Latest iteration: {progress.get('latest_iteration')}")
+    lines.append(f"Best iteration: {progress.get('best_iteration')}")
+    lines.append(
+        f"Latest run improved frontier: {progress.get('current_is_best')}"
+    )
+    lines.append("")
+    lines.append("## Best Summary")
+    best_summary = progress.get("best_summary", {})
+    if best_summary:
+        for key, value in sorted(best_summary.items()):
+            lines.append(f"- `{key}`: `{value}`")
+    else:
+        lines.append("- none")
+    lines.append("")
+    lines.append("## Best Env Vars")
+    lines.extend(_format_env_lines(progress.get("best_env_vars", {})))
+    lines.append("")
+    lines.append("## Recommended Next Env Vars")
+    lines.extend(_format_env_lines(next_env_vars))
+    lines.append("")
+    return "\n".join(lines)
+
+
+def persist_research_artifacts(
+    results: list[dict[str, Any]], *, state_dir: str | Path = RESEARCH_LOOP_STATE_DIR
+) -> dict[str, str]:
+    state_dir = Path(state_dir)
+    state_dir.mkdir(parents=True, exist_ok=True)
+
+    history_path = state_dir / "history.json"
+    best_run_path = state_dir / "best_run.json"
+    next_env_path = state_dir / "next_run_env.json"
+    next_run_markdown_path = state_dir / "NEXT_RUN.md"
+
+    progress = build_research_progress_report(results)
+    best_result = find_best_result(results)
+    latest_result = results[-1] if results else {}
+    next_env_vars = latest_result.get("recommended_next_env_vars", {})
+    timestamp = time.time()
+
+    history_path.write_text(
+        json.dumps(
+            {"updated_at": timestamp, "iterations": results},
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    best_run_path.write_text(
+        json.dumps(
+            {
+                "updated_at": timestamp,
+                "progress": progress,
+                "best_result": best_result,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    next_env_path.write_text(
+        json.dumps(
+            {
+                "updated_at": timestamp,
+                "best_iteration": progress.get("best_iteration"),
+                "recommended_next_env_vars": next_env_vars,
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    next_run_markdown_path.write_text(
+        render_next_research_run_markdown(progress, next_env_vars),
+        encoding="utf-8",
+    )
+
+    return {
+        "history_path": str(history_path),
+        "best_run_path": str(best_run_path),
+        "next_env_path": str(next_env_path),
+        "next_run_markdown_path": str(next_run_markdown_path),
+    }
+
+
 def run_research_loop(
     iterations: int = 3,
     timeout: int | None = None,
@@ -535,7 +647,7 @@ def run_research_loop(
         # 2. Analyze Results
         summary = {}
         if experiment_res.get("status") == "success":
-            summary = get_summary("metrics.jsonl", "experiment_ledger.jsonl")
+            summary = get_summary(str(METRICS_PATH), str(EXPERIMENT_LEDGER_PATH))
         else:
             print(f"Iteration {i+1} experiment did not succeed: {experiment_res.get('status')}")
 
@@ -544,18 +656,28 @@ def run_research_loop(
             "iteration": i + 1,
             "experiment": experiment_res,
             "summary": summary,
-            "applied_env_vars": current_env_vars.copy()
+            "applied_env_vars": current_env_vars.copy(),
         }
         results.append(iteration_result)
 
         print(f"Iteration {i+1} summary: {summary}")
+        progress = build_research_progress_report(results)
+        iteration_result["progress"] = progress
+        if progress.get("current_is_best"):
+            print(f"Iteration {i+1} established a new best run.")
+        elif progress.get("best_iteration") is not None:
+            print(
+                f"Best run remains iteration {progress['best_iteration']} "
+                f"with summary {progress.get('best_summary', {})}"
+            )
+
+        recommended_next_env_vars = suggest_research_env_vars(results)
+        iteration_result["recommended_next_env_vars"] = recommended_next_env_vars
+        iteration_result["artifact_paths"] = persist_research_artifacts(results)
 
         # 3. Mutate (if not last iteration)
         if i < iterations - 1:
-            # TODO: Implement a more advanced mutation strategy (e.g., Bayesian Optimization)
-            # For now, we use a simple linear progression as a demo
-            next_lr = round(0.4 + (i * 0.05), 4)
-            current_env_vars["EMBEDDING_LR"] = str(next_lr)
+            current_env_vars = dict(recommended_next_env_vars)
             print(f"Prepared env overrides for next iteration: {current_env_vars}")
 
     return results
@@ -580,7 +702,7 @@ def main() -> int:
     )
 
     # Prepare Data and Tokenizer
-    from prepare import Tokenizer, evaluate_bpb
+    from entrypoints.prepare import Tokenizer, evaluate_bpb
     from .token_cache import ensure_train_token_cache, make_token_window_loader
 
     tokenizer = Tokenizer.from_directory()
@@ -625,7 +747,7 @@ def main() -> int:
                 print(
                     "\n[System] OOM: Exhausted retries or reached min batch size. Hardware limit."
                 )
-                with open("metrics.jsonl", "a") as f:
+                with METRICS_PATH.open("a", encoding="utf-8") as f:
                     f.write(
                         json.dumps({"failure_reason": "OOM", "message": str(e)}) + "\n"
                     )
@@ -655,7 +777,8 @@ def main() -> int:
                 f"effective_batch={recovered_effective_batch} "
                 f"(target={target_effective_batch})"
             )
-            with open("experiment_ledger.jsonl", "a") as f:
+            ensure_results_layout()
+            with EXPERIMENT_LEDGER_PATH.open("a", encoding="utf-8") as f:
                 f.write(
                     json.dumps(
                         {
@@ -774,5 +897,6 @@ def _report_final_stats(trainer, state, val_bpb, val_bpb_std=None):
             "aspect_ratio": runtime.model.aspect_ratio,
         },
     }
-    with open("experiment_ledger.jsonl", "a") as f:
+    ensure_results_layout()
+    with EXPERIMENT_LEDGER_PATH.open("a", encoding="utf-8") as f:
         f.write(json.dumps(ledger_entry) + "\n")

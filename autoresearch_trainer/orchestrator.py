@@ -1,7 +1,12 @@
 import os
 import subprocess
 import time
+from pathlib import Path
 from typing import Any
+
+RESULTS_DIR = Path("results")
+LOG_DIR = RESULTS_DIR / "logs"
+TRAIN_COMMAND = ["uv", "run", "python", "-m", "entrypoints.train"]
 
 
 def run_experiment(
@@ -10,9 +15,9 @@ def run_experiment(
     extra_args: list[str] | None = None,
     env_vars: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    """Run train.py as a subprocess, optionally guarded by a wall-clock timeout."""
+    """Run the training entrypoint as a subprocess with logs under results/logs/."""
 
-    cmd = ["uv", "run", "train.py"]
+    cmd = list(TRAIN_COMMAND)
     if profile:
         cmd.extend(["--experiment-profile", profile])
     if extra_args:
@@ -24,9 +29,13 @@ def run_experiment(
 
     start_time = time.time()
     try:
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        stdout_path = LOG_DIR / "experiment_stdout.log"
+        stderr_path = LOG_DIR / "experiment_stderr.log"
         # We redirect stdout/stderr to files to avoid memory pressure from large logs
-        with open("experiment_stdout.log", "w", encoding="utf-8") as f_out, \
-             open("experiment_stderr.log", "w", encoding="utf-8") as f_err:
+        with stdout_path.open("w", encoding="utf-8") as f_out, stderr_path.open(
+            "w", encoding="utf-8"
+        ) as f_err:
 
             run_kwargs: dict[str, Any] = {
                 "stdout": f_out,
@@ -47,16 +56,16 @@ def run_experiment(
                 "status": "success",
                 "returncode": 0,
                 "elapsed": elapsed,
-                "stdout_path": "experiment_stdout.log",
-                "stderr_path": "experiment_stderr.log"
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
             }
         else:
             return {
                 "status": "failed",
                 "returncode": result.returncode,
                 "elapsed": elapsed,
-                "stdout_path": "experiment_stdout.log",
-                "stderr_path": "experiment_stderr.log"
+                "stdout_path": str(stdout_path),
+                "stderr_path": str(stderr_path),
             }
             
     except subprocess.TimeoutExpired:
