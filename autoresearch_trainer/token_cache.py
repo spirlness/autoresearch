@@ -8,8 +8,12 @@ from itertools import chain
 from pathlib import Path
 
 import numpy as np
-import pyarrow.parquet as pq
 import torch
+
+try:
+    import pyarrow.parquet as pq
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test envs
+    pq = None
 
 from entrypoints.prepare import (
     CACHE_DIR,
@@ -22,6 +26,15 @@ from entrypoints.prepare import (
 
 CACHE_VERSION = 1
 TOKENIZER_BATCH_SIZE = 128
+
+
+def _require_pyarrow():
+    if pq is None:
+        raise ModuleNotFoundError(
+            "pyarrow is required to build the token cache from parquet shards. "
+            "Install project dependencies with `uv sync` or `pip install pyarrow`."
+        )
+    return pq
 
 
 @dataclass(frozen=True)
@@ -88,6 +101,7 @@ def _meta_matches(
 def ensure_train_token_cache(
     tokenizer: Tokenizer, *, verbose: bool = True
 ) -> TokenCacheInfo:
+    parquet = _require_pyarrow()
     train_paths = _train_shard_paths()
     if not train_paths:
         raise RuntimeError("No training shards found. Run prepare.py first.")
@@ -128,7 +142,7 @@ def ensure_train_token_cache(
         with open(tmp_path, "wb") as handle:
             for shard_idx, shard_path in enumerate(train_paths, start=1):
                 shard_tokens = 0
-                parquet_file = pq.ParquetFile(shard_path)
+                parquet_file = parquet.ParquetFile(shard_path)
                 for row_group_idx in range(parquet_file.num_row_groups):
                     row_group = parquet_file.read_row_group(
                         row_group_idx, columns=["text"]

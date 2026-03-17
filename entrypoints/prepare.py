@@ -19,10 +19,22 @@ import pickle
 from multiprocessing import Pool
 
 import requests
-import pyarrow.parquet as pq
-import rustbpe
-import tiktoken
 import torch
+
+try:
+    import pyarrow.parquet as pq
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test envs
+    pq = None
+
+try:
+    import rustbpe
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test envs
+    rustbpe = None
+
+try:
+    import tiktoken
+except ModuleNotFoundError:  # pragma: no cover - exercised in minimal test envs
+    tiktoken = None
 
 # ---------------------------------------------------------------------------
 # Constants (fixed, do not modify)
@@ -50,6 +62,30 @@ SPLIT_PATTERN = r"""'(?i:[sdmt]|ll|ve|re)|[^\r\n\p{L}\p{N}]?+\p{L}+|\p{N}{1,2}| 
 
 SPECIAL_TOKENS = [f"<|reserved_{i}|>" for i in range(4)]
 BOS_TOKEN = "<|reserved_0|>"
+
+
+def _require_pyarrow():
+    if pq is None:
+        raise ModuleNotFoundError(
+            "pyarrow is required for parquet data access. Install project dependencies "
+            "with `uv sync` or `pip install pyarrow`."
+        )
+    return pq
+
+
+def _require_tokenizer_training_deps():
+    if rustbpe is None or tiktoken is None:
+        missing = []
+        if rustbpe is None:
+            missing.append("rustbpe")
+        if tiktoken is None:
+            missing.append("tiktoken")
+        raise ModuleNotFoundError(
+            "Tokenizer training dependencies are missing: "
+            + ", ".join(missing)
+            + ". Install project dependencies with `uv sync`."
+        )
+    return rustbpe, tiktoken
 
 # ---------------------------------------------------------------------------
 # Data download
@@ -136,10 +172,11 @@ def list_parquet_files():
 
 def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
     """Yield documents from training split (all shards except pinned val shard)."""
+    parquet = _require_pyarrow()
     parquet_paths = [p for p in list_parquet_files() if not p.endswith(VAL_FILENAME)]
     nchars = 0
     for filepath in parquet_paths:
-        pf = pq.ParquetFile(filepath)
+        pf = parquet.ParquetFile(filepath)
         for rg_idx in range(pf.num_row_groups):
             rg = pf.read_row_group(rg_idx)
             for text in rg.column("text").to_pylist():
@@ -152,6 +189,7 @@ def text_iterator(max_chars=1_000_000_000, doc_cap=10_000):
 
 def train_tokenizer():
     """Train BPE tokenizer using rustbpe, save as tiktoken pickle."""
+    rustbpe_mod, tiktoken_mod = _require_tokenizer_training_deps()
     tokenizer_pkl = os.path.join(TOKENIZER_DIR, "tokenizer.pkl")
     token_bytes_path = os.path.join(TOKENIZER_DIR, "token_bytes.pt")
 
@@ -172,7 +210,7 @@ def train_tokenizer():
     print("Tokenizer: training BPE tokenizer...")
     t0 = time.time()
 
-    tokenizer = rustbpe.Tokenizer()
+    tokenizer = rustbpe_mod.Tokenizer()
     vocab_size_no_special = VOCAB_SIZE - len(SPECIAL_TOKENS)
     tokenizer.train_from_iterator(
         text_iterator(), vocab_size_no_special, pattern=SPLIT_PATTERN
@@ -183,7 +221,7 @@ def train_tokenizer():
     mergeable_ranks = {bytes(k): v for k, v in tokenizer.get_mergeable_ranks()}
     tokens_offset = len(mergeable_ranks)
     special_tokens = {name: tokens_offset + i for i, name in enumerate(SPECIAL_TOKENS)}
-    enc = tiktoken.Encoding(
+    enc = tiktoken_mod.Encoding(
         name="rustbpe",
         pat_str=pattern,
         mergeable_ranks=mergeable_ranks,
@@ -275,6 +313,7 @@ def get_token_bytes(device="cpu"):
 
 def _document_batches(split, tokenizer_batch_size=128):
     """Infinite iterator over document batches from parquet files."""
+    parquet = _require_pyarrow()
     parquet_paths = list_parquet_files()
     assert len(parquet_paths) > 0, "No parquet files found. Run prepare.py first."
     val_path = os.path.join(DATA_DIR, VAL_FILENAME)
@@ -286,7 +325,7 @@ def _document_batches(split, tokenizer_batch_size=128):
     epoch = 1
     while True:
         for filepath in parquet_paths:
-            pf = pq.ParquetFile(filepath)
+            pf = parquet.ParquetFile(filepath)
             for rg_idx in range(pf.num_row_groups):
                 rg = pf.read_row_group(rg_idx)
                 batch = rg.column("text").to_pylist()
