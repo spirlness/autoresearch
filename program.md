@@ -43,7 +43,9 @@ Default posture:
   - `optimizer.py` - fused optimizer logic
   - `compile.py` - compile backend handling
   - `token_cache.py` - mmap cache and train loader
-  - `runner.py` - train loop, benchmark logging, research loop
+  - `train_session.py` - single-run training lifecycle, OOM recovery, final evaluation
+  - `research_loop.py` - autonomous benchmark/train/confirm loop
+  - `runner.py` - package facade and CLI export surface
   - `analyzer.py` - result scoring and progress reporting
   - `mutator.py` - next-step env-var suggestions
   - `orchestrator.py` - subprocess experiment execution
@@ -88,6 +90,8 @@ At the start of a fresh autonomous session:
 3. Read the in-scope files for context:
    - `README.md`
    - `autoresearch_trainer/config.py`
+   - `autoresearch_trainer/train_session.py`
+   - `autoresearch_trainer/research_loop.py`
    - `autoresearch_trainer/runner.py`
    - `autoresearch_trainer/analyzer.py`
    - `autoresearch_trainer/mutator.py`
@@ -97,7 +101,7 @@ At the start of a fresh autonomous session:
    - `autoresearch_trainer/utils/platform.py`
    - `docs/findings/benchmark-findings.md` when tuning performance
 4. Verify cached data and tokenizer exist under `~/.cache/autoresearch/`. If not, ask the human to run `uv run python -m entrypoints.prepare`.
-5. Ensure `results.tsv` exists with the expected header if you will log new full experiments.
+5. Treat `results/research_loop/` plus the JSONL outputs under `results/` as the canonical run state.
 
 If there is no existing frontier for this branch/session, establish a fresh baseline before trying improvements.
 
@@ -282,26 +286,13 @@ If a result is extremely close to the current best and the direction still looks
 
 When a run becomes the new best:
 
-1. record it in `results.tsv`
-2. inspect `results/research_loop/NEXT_RUN.md`
+1. inspect `results/research_loop/NEXT_RUN.md`
+2. inspect `results/research_loop/best_run.json`
 3. continue searching locally around that frontier before exploring elsewhere
 
 ## Logging
 
-For human-readable experiment history, keep `results.tsv` as an untracked TSV file with:
-
-```tsv
-commit	val_bpb	memory_gb	status	description
-```
-
-Rules:
-
-- log full train outcomes there
-- use `crash` for failed runs
-- do not commit `results.tsv`
-- do not commit generated logs or `results/research_loop/` artifacts
-
-Use the structured outputs for machine-readable state:
+Use the structured outputs for machine-readable and resume-friendly state:
 
 - `results/metrics.jsonl`
 - `results/experiment_ledger.jsonl`
@@ -311,7 +302,6 @@ Use the structured outputs for machine-readable state:
 - `results/research_loop/NEXT_RUN.md`
 
 Treat `results/research_loop/` as the primary continuation mechanism for autonomous sessions.
-Treat `results.tsv` as the human-readable ledger of important full runs.
 
 ## Stop-Loss Rules
 
@@ -371,7 +361,7 @@ Use this commit rhythm:
 
 - do not commit every speculative benchmark tweak
 - commit when a code change is worth keeping
-- do not commit generated logs, `results.tsv`, or `results/research_loop/`
+- do not commit generated logs or `results/research_loop/`
 - if a change is discarded, remove only your own change cleanly
 
 For long autonomous runs, prefer fewer but clearer commits over noisy micro-commits.

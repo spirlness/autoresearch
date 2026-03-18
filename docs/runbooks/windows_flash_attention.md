@@ -19,6 +19,8 @@ uv sync
 uv run python -m entrypoints.verify_flash_attn
 ```
 
+Windows compile support also requires Visual Studio Build Tools with `Desktop development with C++` so `cl.exe` is available for the validated `torch.compile` path.
+
 If you want an extra local backup copy, you can keep the wheel under `vendor/`, but it is no longer required for `uv sync` and should remain untracked.
 
 Expected outcome:

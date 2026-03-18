@@ -239,6 +239,8 @@ class TokenWindowLoader:
         self.tokens_sampled = 0
         self.generator = torch.Generator(device="cpu")
         self.generator.manual_seed(seed)
+        self._stop_event = threading.Event()
+        self._closed = False
 
         self.gpu_buffer = torch.empty(
             2 * batch_size * sequence_len, dtype=torch.long, device=device
@@ -269,8 +271,11 @@ class TokenWindowLoader:
 
     def _worker_loop(self):
         """Background thread loop for prefetching and formatting token windows."""
-        while True:
-            hw, rb, cb = self.free_queue.get()
+        while not self._stop_event.is_set():
+            try:
+                hw, rb, cb = self.free_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
 
             starts = torch.randint(
                 0, self.max_start + 1, (self.batch_size,), generator=self.generator
@@ -288,13 +293,54 @@ class TokenWindowLoader:
             ci.copy_(rb[:, :-1])
             ct.copy_(rb[:, 1:])
 
-            self.ready_queue.put((hw, rb, cb))
+            while not self._stop_event.is_set():
+                try:
+                    self.ready_queue.put((hw, rb, cb), timeout=0.1)
+                    break
+                except queue.Full:
+                    continue
+
+    @staticmethod
+    def _drain_queue(buffer_queue: queue.Queue) -> None:
+        while True:
+            try:
+                buffer_queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        self._closed = True
+        self._stop_event.set()
+        self.worker.join(timeout=1.0)
+        if self.worker.is_alive():
+            return
+
+        self._drain_queue(self.ready_queue)
+        self._drain_queue(self.free_queue)
+        mmap_handle = getattr(self.tokens, "_mmap", None)
+        if mmap_handle is not None:
+            mmap_handle.close()
+        self.tokens = None
+        self.inputs = None
+        self.targets = None
+        self.gpu_buffer = None
+
+    def __del__(self) -> None:
+        try:
+            self.close()
+        except Exception:
+            pass
 
     def __iter__(self) -> TokenWindowLoader:
         return self
 
     def __next__(self):
         """Yields the next batch of input and target tensors."""
+        if self._closed:
+            raise StopIteration
         hw, rb, cb = self.ready_queue.get()
         ci = cb[: self.batch_size * self.sequence_len].view(
             self.batch_size, self.sequence_len

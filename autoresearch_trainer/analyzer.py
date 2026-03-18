@@ -234,22 +234,30 @@ def get_summary(metrics_path: str, ledger_path: str) -> Dict[str, Any]:
     """Get summary from metrics and ledger files."""
     metrics = parse_metrics(metrics_path)
     ledger = parse_ledger(ledger_path)
-    
+
     summary = {}
     if ledger:
         # Take the last entry from the ledger for final stats
         last_run = ledger[-1]
         summary["val_bpb"] = last_run.get("val_bpb", float("inf"))
+        summary["val_bpb_std"] = last_run.get("val_bpb_std", 0.0)
         summary["tok_per_sec"] = last_run.get("end_to_end_tok_per_sec", 0.0)
         summary["warmup_tok_per_sec"] = last_run.get("warmup_excluded_tok_per_sec", 0.0)
         summary["warmup_mfu"] = last_run.get("warmup_excluded_mfu", 0.0)
         summary["peak_vram_mb"] = last_run.get("peak_vram_mb", 0.0)
         summary["config"] = last_run.get("config", {})
-    
+
     if metrics:
         # Take the last entry from metrics for the final step loss
         last_step = metrics[-1]
         summary["loss"] = last_step.get("loss", float("inf"))
         summary["step"] = last_step.get("step", 0)
-        
+
     return summary
+
+
+def get_summary_for_run(run_dir: str) -> Dict[str, Any]:
+    from .artifacts import resolve_run_artifacts
+
+    artifacts = resolve_run_artifacts(run_dir)
+    return get_summary(str(artifacts.metrics_path), str(artifacts.ledger_path))

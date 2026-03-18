@@ -23,21 +23,25 @@ If you are new to neural networks, this ["Dummy's Guide"](https://x.com/hooeem/s
 
 ## Quick start
 
-**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.10+, [uv](https://docs.astral.sh/uv/).
+**Requirements:** A single NVIDIA GPU (tested on H100), Python 3.11+, and [uv](https://docs.astral.sh/uv/). The pinned Windows Flash Attention path is validated on Python 3.12 AMD64.
+
+On Windows, install Visual Studio Build Tools with `Desktop development with C++` before relying on `torch.compile`.
 
 ```bash
-
-# 1. Install uv project manager (if you don't already have it)
-curl -LsSf https://astral.sh/uv/install.sh | sh
-
-# 2. Install dependencies
+# 1. Install dependencies
 #    On supported Windows machines, uv downloads the pinned Flash Attention wheel automatically.
 uv sync
 
-# 3. Download data and train tokenizer (one-time, ~2 min)
+# 2. Verify the CUDA + Flash Attention path on Windows
+uv run python -m entrypoints.verify_flash_attn
+
+# 3. Run the lightweight test suite
+uv run pytest -q
+
+# 4. Download data and train tokenizer (one-time, ~2 min)
 uv run python -m entrypoints.prepare
 
-# 4. Manually run a single training experiment (~5 min)
+# 5. Manually run a single training experiment (~5 min)
 uv run python -m entrypoints.train
 
 # Compatibility shims remain available if you prefer the old commands
@@ -45,7 +49,7 @@ uv run prepare.py
 uv run train.py
 ```
 
-If the above commands all work ok, your setup is working and you can go into autonomous research mode.
+If the verify, test, and train commands all work, your setup is ready for autonomous research mode.
 
 ## Git safety
 

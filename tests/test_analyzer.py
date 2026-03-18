@@ -51,6 +51,7 @@ def test_get_summary():
     ledger_data = [
         {
             "val_bpb": 1.234,
+            "val_bpb_std": 0.012,
             "end_to_end_tok_per_sec": 1100,
             "warmup_excluded_tok_per_sec": 1200,
             "warmup_excluded_mfu": 12.5,
@@ -64,6 +65,7 @@ def test_get_summary():
         summary = get_summary("metrics.jsonl", "experiment_ledger.jsonl")
 
     assert summary["val_bpb"] == 1.234
+    assert summary["val_bpb_std"] == 0.012
     assert summary["tok_per_sec"] == 1100
     assert summary["warmup_tok_per_sec"] == 1200
     assert summary["warmup_mfu"] == 12.5
